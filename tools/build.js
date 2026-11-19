@@ -23,7 +23,8 @@ const version = (() => {
   catch (e) { return '0.0.0'; }
 })();
 
-fs.rmSync(OUT, { recursive: true, force: true });
+fs.rmSync(path.join(OUT, 'game'), { recursive: true, force: true });
+fs.rmSync(path.join(OUT, 'assets'), { recursive: true, force: true });
 copyDir(SRC, path.join(OUT, 'game'));
 fs.mkdirSync(path.join(OUT, 'assets'), { recursive: true });
 for (const name of fs.readdirSync(ASSETS)) {

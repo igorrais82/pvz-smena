@@ -29,6 +29,7 @@ html = html.replace(/<script src="([^"]+)"><\/script>/g, function (_, src) {
 });
 
 // иконки — data URI, чтобы файл был полностью автономным
+html = html.replace(/<link rel="manifest" href="[^"]+">\s*/, '');
 html = html.replace(/<link rel="icon" href="([^"]+)" sizes="any">/g, function (_, href) {
   const file = path.resolve(GAME, href);
   return '<link rel="icon" href="' + dataUri(file, 'image/x-icon') + '" sizes="any">';
