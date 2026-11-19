@@ -1,0 +1,34 @@
+# зависимости не используются
+node_modules/
+package-lock.json
+
+# временные профили headless-браузера и артефакты прогонов
+.chrome-prof*/
+pvz-cdp-*/
+_junk/
+shots/
+
+# артефакты сборки
+dist/game/
+dist/assets/
+dist/build.json
+dist/pc/
+dist/android/
+dist/*.zip
+dist/*.apk
+dist/*.html
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore/
+android/keystore.properties
+android/app/src/main/assets/game/
+
+# системный мусор
+Thumbs.db
+desktop.ini
+.DS_Store
+*.log

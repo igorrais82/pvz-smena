@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#120e0c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="Симулятор работы в пункте выдачи заказов: приёмка поставки, выдача по коду, примерочная, возвраты, касса, магазин улучшений и декора. 16 пасхалок и вечерний оброк мафии.">
+<meta name="version" content="1.6.1">
+<title>ПВЗ: Смена — симулятор пункта выдачи</title>
+<link rel="icon" href="../assets/pvz.ico" sizes="any">
+<link rel="apple-touch-icon" href="icon-256.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game" width="1280" height="720"></canvas>
+
+    <div id="topright">
+      <button id="btn-sound" title="Звук">&#128266;</button>
+      <button id="btn-full" title="Во весь экран">&#9974;</button>
+    </div>
+  </div>
+
+  <script src="src/core.js"></script>
+  <script src="src/pay.js"></script>
+  <script src="src/art.js"></script>
+  <script src="src/systems.js"></script>
+  <script src="src/apps.js"></script>
+  <script src="src/scenes.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>

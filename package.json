@@ -1,0 +1,24 @@
+{
+  "name": "pvz-smena",
+  "version": "1.6.1",
+  "private": true,
+  "description": "ПВЗ: Смена — симулятор пункта выдачи заказов на Canvas 2D без зависимостей",
+  "scripts": {
+    "start": "start game/index.html",
+    "build": "node tools/build.js",
+    "smoke": "node tools/smoke.js",
+    "shots": "node tools/review-shots.js",
+    "review": "node tools/review-day.js",
+    "economy": "node tools/review-economy.js"
+  },
+  "keywords": [
+    "game",
+    "canvas",
+    "simulator",
+    "pvz"
+  ],
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  }
+}
