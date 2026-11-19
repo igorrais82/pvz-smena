@@ -3,9 +3,21 @@
   "version": "1.6.1",
   "private": true,
   "description": "ПВЗ: Смена — симулятор пункта выдачи заказов на Canvas 2D без зависимостей",
+  "homepage": "https://igorrais82.github.io/pvz-smena/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/igorrais82/pvz-smena.git"
+  },
+  "author": "igorrais82",
   "scripts": {
     "start": "start game/index.html",
     "build": "node tools/build.js",
+    "build:single": "node tools/build-single.js",
+    "build:pc": "node tools/build-pc.js",
+    "build:android": "node tools/build-android.js",
+    "build:all": "node tools/build-all.js",
+    "icons:android": "python tools/make-android-icons.py",
+    "serve": "node tools/serve.js",
     "smoke": "node tools/smoke.js",
     "shots": "node tools/review-shots.js",
     "review": "node tools/review-day.js",

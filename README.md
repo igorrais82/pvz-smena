@@ -1,8 +1,26 @@
 # ПВЗ: Смена
 
+[![Версия](https://img.shields.io/github/v/release/igorrais82/pvz-smena?color=f2994a&label=%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F)](https://github.com/igorrais82/pvz-smena/releases)
+[![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)](https://github.com/igorrais82/pvz-smena/releases/latest/download/PVZ-Smena-win64.zip)
+[![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white)](https://github.com/igorrais82/pvz-smena/releases/latest/download/PVZ-Smena.apk)
+[![Веб](https://img.shields.io/badge/%D0%B1%D1%80%D0%B0%D1%83%D0%B7%D0%B5%D1%80-%D0%B8%D0%B3%D1%80%D0%B0%D1%82%D1%8C-f2994a)](https://igorrais82.github.io/pvz-smena/game/index.html)
+
+![ПВЗ: Смена — день в пункте выдачи](store/01-day.png)
+
 Симулятор работы в пункте выдачи заказов: приёмка поставки, выдача по коду, примерочная, возвраты, касса, отзывы, магазин улучшений и декора — плюс вечерний «оброк» мафии, которой вы задолжали.
 
 Игра написана на чистом JavaScript и Canvas 2D: **без зависимостей, без сборки, без интернета**. Запускается двойным кликом по `game/index.html`, работает с `file://`.
+
+## Скачать
+
+| Платформа | Файл | Размер | Как запустить |
+|---|---|---|---|
+| **Windows 10/11** | [PVZ-Smena-win64.zip](https://github.com/igorrais82/pvz-smena/releases/latest/download/PVZ-Smena-win64.zip) | ~0,4 МБ | распаковать и запустить «Запустить ПВЗ.vbs» |
+| **Android 7.0+** | [PVZ-Smena.apk](https://github.com/igorrais82/pvz-smena/releases/latest/download/PVZ-Smena.apk) | ~0,5 МБ | открыть APK и разрешить установку из этого источника |
+| **Браузер** | [Играть онлайн](https://igorrais82.github.io/pvz-smena/game/index.html) | — | ничего скачивать не нужно |
+| **Один файл** | [PVZ-Smena.html](https://github.com/igorrais82/pvz-smena/releases/latest/download/PVZ-Smena.html) | ~1 МБ | открыть в любом браузере, работает с флешки |
+
+Все версии, исходники и история изменений — на [странице проекта](https://igorrais82.github.io/pvz-smena/) и в [релизах](https://github.com/igorrais82/pvz-smena/releases).
 
 ## Как играть
 
@@ -90,6 +108,21 @@
 
 Игра работает в ландшафте на телефоне: при ширине окна меньше 1000 px включается компактный интерфейс — крупный HUD одной строкой, полноэкранные диалоги, увеличенный магазин и меню. Поля вокруг 16:9 залиты тёплым фоном, поэтому на 20:9-экранах не выглядят обрезанными. Если текст всё ещё мелкий, масштаб можно поднять вручную: `?ui=1.3` (до 1.6).
 
+Для Android есть готовая WebView-сборка: [PVZ-Smena.apk](https://github.com/igorrais82/pvz-smena/releases/latest/download/PVZ-Smena.apk) (Android 7.0+, landscape, без интернета). Браузерная версия на GitHub Pages кэшируется service worker'ом (`game/sw.js`) и запускается офлайн после первого открытия.
+
+## Скриншоты
+
+<p align="center">
+  <img src="store/02-dialog.png" width="49%" alt="Диалог с покупателем">
+  <img src="store/03-shop.png" width="49%" alt="Магазин улучшений">
+</p>
+<p align="center">
+  <img src="store/04-evening.png" width="49%" alt="Вечерняя смена">
+  <img src="store/05-report.png" width="49%" alt="Отчёт за смену">
+</p>
+
+Больше кадров и кнопки скачивания — на [странице проекта](https://igorrais82.github.io/pvz-smena/).
+
 ## Пасхалки
 
 В игре спрятано **16 секретов**: 12 редких гостей (Геральт, Тёмный лорд, Шерлок, доктор Хаус, Уолтер Уайт, Гэндальф, Марио, Соник, Тёмный рыцарь, Шелдон, Бонд, Дед Мороз) и 4 интерактивных секрета (кружка на столе, фигурки, кот, Konami-код). Найденные собираются в приложении **«Секреты»** на ноутбуке — оно открывается вместе с первой находкой.
@@ -109,8 +142,20 @@ npm run smoke
 # проверка Premium store, радио, Артёма, звонка Босса и кода в терминале
 node tools/probe-v15.js
 
-# собрать статическую версию в dist/ (для WebView-контейнера RuStore)
+# статическая сборка dist/game (для WebView-контейнера и сайта)
 npm run build
+
+# один автономный HTML-файл (~1 МБ) для флешки и любого браузера
+npm run build:single
+
+# портативная сборка Windows: папка + лаунчер + ZIP
+npm run build:pc
+
+# Android APK (нужны JDK 17+ и Android SDK: platform 35, build-tools 35)
+npm run build:android
+
+# всё сразу: dist/game, HTML, ZIP и APK
+npm run build:all
 
 # скриншоты и прогоны в headless Chrome (нужен установленный Chrome/Edge)
 npm run shots
@@ -120,7 +165,7 @@ npm run review
 node tools/cdp.js "file:///<путь>/game/index.html?dev=day&mode=hud" shots/new-hud.png --evalfile=tools/verify-shots.js
 ```
 
-Требуется только Node.js (для тестов) и браузер. Никаких `npm install` — зависимостей нет.
+Требуется только Node.js 18+ (для тестов и сборок) и браузер. Никаких `npm install` — зависимостей нет. Для APK дополнительно нужны JDK 17+ и Android SDK; Gradle скачивается при первой сборке (или берётся из кэша).
 
 ## Структура
 
@@ -128,6 +173,8 @@ node tools/cdp.js "file:///<путь>/game/index.html?dev=day&mode=hud" shots/ne
 game/
   index.html        точка входа, подключает скрипты по порядку
   style.css         канвас, фуллскрин, поле ввода названия ПВЗ
+  manifest.webmanifest  PWA-манифест для установки из браузера
+  sw.js             офлайн-кэш браузерной версии (только https)
   src/core.js       утилиты, звук и музыка (WebAudio, без файлов), ввод, сохранения, тарифы
   src/pay.js        платёжный слой: demo / RuStore Billing / платёжная страница
   src/art.js        вся векторная графика: интерьеры, люди, реквизит, HUD
@@ -135,13 +182,19 @@ game/
   src/apps.js       приложения ноутбука и App Market, Premium store, радио и экраны программ
   src/scenes.js     сцены: меню, смена (утро → день → вечер), отчёт, магазин, мафия, пролог, финал
   src/main.js       цикл, пауза, переходы, разрешение, текст, отладочные входы
-tools/              smoke-тест, headless-скриншоты и сценарные прогоны (не входят в игру)
-tools/verify-shots.js  подготовка кадров для проверки новых механик (`?mode=hud|parcel|dialog|conseq|endlesshud|endlessreport|help1|help3|menu|laptophome|premium|premiumitems|premiumcoins|premiumbuy`)
+android/            Gradle-проект Android-обёртки (WebView, landscape, кнопка «Назад»)
+index.html          страница проекта: описание, скриншоты и скачивание (GitHub Pages)
+landing.css         стили страницы проекта
+tools/              smoke-тест, headless-скриншоты, сценарные прогоны и сборки
+tools/build.js      статическая сборка dist/game
+tools/build-single.js  один автономный HTML-файл
+tools/build-pc.js   портативный ZIP для Windows с лаунчером
+tools/build-android.js  сборка и подпись APK
+tools/lib/zip.js    минимальный ZIP-архиватор без зависимостей
 assets/             иконки приложения
-shots/              скриншоты и артефакты прогонов
 store/              готовые скриншоты 16:9 с подписями и иконка 512 для карточки RuStore
-dist/               артефакт сборки (создаётся `npm run build`)
-_junk/              старые мусорные файлы с именами флагов, в игре не используются
+shots/              скриншоты и артефакты прогонов (в git не входят)
+dist/               готовые сборки: HTML, ZIP и APK (артефакты в git не входят)
 ```
 
 ## Отладочные входы
@@ -219,8 +272,9 @@ node tools/smoke.js
 
 ## Публикация в RuStore
 
+Кнопка `DEV` и читы (`scenes.js`, объект `api.debug`) — отладочные. Перед сборкой релиза их нужно убрать или закрыть проверкой `location.search`. Игра — статический сайт: для RuStore заворачивается в WebView-контейнер (ориентация landscape, fullscreen, без доступа в сеть). Манифест для PWA лежит в `game/manifest.webmanifest`, офлайн-кэш — в `game/sw.js`.
 
-Кнопка `DEV` и читы (`scenes.js`, объект `api.debug`) — отладочные. Перед сборкой релиза их нужно убрать или закрыть проверкой `location.search`. Игра — статический сайт: для RuStore заворачивается в WebView-контейнер (ориентация landscape, fullscreen, без доступа в сеть). Манифест для PWA уже лежит в `game/manifest.webmanifest`.
+Готовая Android-обёртка лежит в `android/`: `npm run build:android` собирает подписанный release-APK и кладёт его в `dist/`. Подробности про ключ, SDK и обновления — в [android/README.md](android/README.md).
 
 Комплект для карточки уже собран: иконка 512×512 и пять скриншотов 16:9 с подписями — в `store/`. Пересобрать: `python tools/make-icon.py` и `python tools/make-store-shots.py` (нужен Pillow). Требования RuStore: иконка 512×512, минимум 3 скриншота 16:9.
 
