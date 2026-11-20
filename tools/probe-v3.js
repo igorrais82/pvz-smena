@@ -105,7 +105,7 @@
     ok(!!st.dlg, 'диалог вернулся после допродажи');
 
     // выдаём
-    const giveIdx = st.dlg.choices.findIndex(ch => /Выдать заказ|Выдать посылку/.test(ch.label));
+    const giveIdx = st.dlg.choices.findIndex(ch => /Отдать товар|Выдать заказ|Выдать посылку/.test(ch.label));
     ok(giveIdx >= 0, 'есть кнопка выдачи');
     if (giveIdx >= 0) hitR(st.dlg.choiceRects[giveIdx]);
     await sleep(400);

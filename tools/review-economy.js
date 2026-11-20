@@ -24,7 +24,7 @@
     let guard = 0;
     while (st.customer && guard++ < 30) {
       if (st.dlg) {
-        const idx = st.dlg.choices.findIndex(c => /Выдать заказ|Выдать посылку/.test(c.label));
+        const idx = st.dlg.choices.findIndex(c => /Отдать товар|Выдать заказ|Выдать посылку/.test(c.label));
         const r = st.dlg.choiceRects[idx >= 0 ? idx : 0];
         PVZ.input.dispatch('tap', r.x + 40, r.y + 20);
         await wait(220);

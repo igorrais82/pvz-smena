@@ -32,8 +32,13 @@
   };
 
   /* Конфиг из окружения: window.PVZ_PAY_CONFIG (положить перед src/pay.js)
-     либо параметр ?pay=rustore|web|demo для проверки на устройстве. */
+     либо параметр ?pay=rustore|web|demo для проверки на устройстве.
+     В релизной сборке (window.PVZ_RELEASE) демо-провайдер выключен по умолчанию:
+     витрина уходит на RuStore Billing, а без моста просто не показывает рубли. */
   (function readEnv() {
+    if (window.PVZ_RELEASE && !window.PVZ_PAY_CONFIG) {
+      pay.configure({ provider: 'rustore', testMode: false });
+    }
     if (window.PVZ_PAY_CONFIG && typeof window.PVZ_PAY_CONFIG === 'object') {
       pay.configure(window.PVZ_PAY_CONFIG);
     }
@@ -48,6 +53,29 @@
 
   pay.provider = function () { return pay.config.provider || 'demo'; };
   pay.isLive = function () { return pay.provider() !== 'demo'; };
+
+  /* Можно ли прямо сейчас принять деньги. В релизе демо-оплата запрещена,
+     иначе игрок получал бы платные товары бесплатно. */
+  pay.canPay = function () {
+    var p = pay.provider();
+    if (p === 'demo') {
+      if (!window.PVZ_RELEASE) return true;
+      try { return /[?&]pay=demo/.test(String(location.search || '')); } catch (e) { return false; }
+    }
+    if (p === 'web') return !!pay.config.endpoint;
+    if (p === 'rustore') {
+      var b = nativeBridge();
+      if (b && typeof b.billingAvailable === 'function') {
+        try {
+          if (String(b.billingAvailable()) !== 'true') return false;
+        } catch (e) { return false; }
+        return typeof b.purchase === 'function';
+      }
+      var legacy = legacyBridge();
+      return !!(legacy && typeof legacy.purchase === 'function');
+    }
+    return false;
+  };
 
   /* Цена в формате «299 ₽» */
   pay.priceLabel = function (price, currency) {
@@ -73,41 +101,93 @@
     }
   };
 
-  /* ---------------- RuStore Billing ---------------- */
-  /* Ожидает мост из Android-обёртки (WebView + BillingClient):
-     window.RuStoreBilling.purchase(jsonString) → jsonString
-     { status: 'success'|'cancelled'|'pending'|'error', purchaseId, error }
+  /* ---------------- RuStore Pay SDK (Billing) ---------------- */
+  /* Два протокола моста из Android-обёртки:
+
+     1) Асинхронный (рекомендуется, Pay SDK 11.x — покупка всегда асинхронна):
+        window.PVZNative.billingAvailable() → "true" | "false"
+        window.PVZNative.purchase(requestId, jsonString)
+        → обёртка после ответа вызывает
+          PVZ.pay.onNativePurchase(requestId, jsonString)
+          { status: 'success'|'cancelled'|'pending'|'error', purchaseId, error }
+        Нативный код: см. android/.../PvzBridge.java и RELEASE-RUSTORE.md.
+
+     2) Старый синхронный мост (совместимость):
+        window.RuStoreBilling.purchase(jsonString) → jsonString.
+
      Серверная проверка чека — на вашей стороне: pay.verifyReceipt. */
-  function rustoreBridge() {
-    return window.RuStoreBilling || (window.PVZNative && window.PVZNative.billing) || null;
+  var buySeq = 0;
+  var pendingBuys = {};
+
+  function nativeBridge() { return window.PVZNative || null; }
+  function legacyBridge() { return window.RuStoreBilling || null; }
+
+  function finishBuy(id, res) {
+    var cb = pendingBuys[id];
+    if (!cb) return;
+    delete pendingBuys[id];
+    cb(res);
   }
+
+  /* Ответ нативного моста на покупку. */
+  pay.onNativePurchase = function (id, raw) {
+    var res = raw;
+    if (typeof raw === 'string') {
+      try { res = JSON.parse(raw); } catch (e) { res = { status: raw }; }
+    }
+    finishBuy(id, res || { status: 'error', error: 'Пустой ответ Billing' });
+  };
+
   var rustore = {
     id: 'rustore',
     live: true,
     purchase: function (order, done) {
-      var bridge = rustoreBridge();
-      if (!bridge || typeof bridge.purchase !== 'function') {
+      var payload = { productId: order.sku, title: order.title, price: order.price, currency: order.currency || 'RUB' };
+
+      var bridge = nativeBridge();
+      if (bridge && typeof bridge.purchase === 'function') {
+        var reqId = 'buy' + (++buySeq) + '-' + Date.now().toString(36);
+        pendingBuys[reqId] = function (res) {
+          if (!res) return done({ ok: false, error: 'Billing не вернул ответ.' });
+          if (res.status === 'success' || res.status === 'purchased') {
+            return pay.verifyReceipt({ provider: 'rustore', order: order, receipt: res }, done);
+          }
+          if (res.status === 'pending') return done({ ok: false, pending: true, error: 'Платёж обрабатывается — загляните в магазин через минуту.' });
+          if (res.status === 'cancelled') return done({ ok: false, cancelled: true, error: 'Оплата отменена.' });
+          done({ ok: false, error: res.error || 'Billing отклонил платёж.' });
+        };
+        try {
+          bridge.purchase(reqId, JSON.stringify(payload));
+        } catch (e) {
+          delete pendingBuys[reqId];
+          return done({ ok: false, error: 'Ошибка Billing: ' + (e && e.message ? e.message : e) });
+        }
+        setTimeout(function () { finishBuy(reqId, { ok: false, pending: true, error: 'Платёж не ответил за 3 минуты.' }); }, 180000);
+        return;
+      }
+
+      var legacy = legacyBridge();
+      if (!legacy || typeof legacy.purchase !== 'function') {
         return done({
           ok: false,
-          error: 'RuStore Billing не подключён: нужен Android-контейнер и товары в консоли RuStore.'
+          error: 'Платежи не подключены: нужен Android-контейнер с RuStore Pay SDK и товары в консоли.'
         });
       }
-      var payload = { productId: order.sku, title: order.title, price: order.price, currency: order.currency || 'RUB' };
       var raw;
-      try { raw = bridge.purchase(JSON.stringify(payload)); }
-      catch (e) { return done({ ok: false, error: 'Ошибка RuStore Billing: ' + (e && e.message ? e.message : e) }); }
+      try { raw = legacy.purchase(JSON.stringify(payload)); }
+      catch (e) { return done({ ok: false, error: 'Ошибка Billing: ' + (e && e.message ? e.message : e) }); }
 
       var res = raw;
       if (typeof raw === 'string') {
         try { res = JSON.parse(raw); } catch (e) { res = { status: raw }; }
       }
-      if (!res) return done({ ok: false, error: 'RuStore Billing не вернул ответ.' });
+      if (!res) return done({ ok: false, error: 'Billing не вернул ответ.' });
       if (res.status === 'success' || res.status === 'purchased') {
         return pay.verifyReceipt({ provider: 'rustore', order: order, receipt: res }, done);
       }
       if (res.status === 'pending') return done({ ok: false, pending: true, error: 'Платёж обрабатывается — загляните в магазин через минуту.' });
       if (res.status === 'cancelled') return done({ ok: false, cancelled: true, error: 'Оплата отменена.' });
-      done({ ok: false, error: res.error || 'RuStore Billing отклонил платёж.' });
+      done({ ok: false, error: res.error || 'Billing отклонил платёж.' });
     }
   };
 

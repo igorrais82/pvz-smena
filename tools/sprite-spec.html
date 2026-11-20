@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>PVZ — замер габаритов покупателя</title>
+<!--
+  Служебная страница для замера реальных габаритов drawPerson.
+  Открывается вместе с tools/sprite-spec-eval.js через tools/cdp.js:
+
+    node tools/cdp.js "file:///<путь>/tools/sprite-spec.html" shots/probe.png \
+         --evalfile=tools/sprite-spec-eval.js
+
+  Возвращает bbox фигуры в долях роста (left/right/top/bottom) для разных
+  причёсок, шапок, сумок и позы «руки вверх». Числа в art/customers/README.md
+  сняты из формул drawPerson; этот пробник нужен, если формулы поменяют.
+-->
+</head>
+<body style="margin:0;background:#222">
+<canvas id="c" width="1600" height="900"></canvas>
+<script src="../game/src/core.js"></script>
+<script src="../game/src/art.js"></script>
+</body>
+</html>

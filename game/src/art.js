@@ -364,443 +364,681 @@
       sleeves: opts.sleeves || (U.chance(0.4) ? 'short' : 'long'),
       pattern: opts.pattern || U.pick(['plain', 'plain', 'plain', 'stripe', 'pocket', 'badge']),
       collar: opts.collar || U.pick(['round', 'v', 'polo']),
+      // мультяшные пропорции: голова и телосложение гуляют от человека к человеку
+      headScale: opts.headScale == null ? U.rand(0.86, 1.26) : opts.headScale,
+      build: opts.build == null ? U.rand(0.9, 1.22) : opts.build,
       name: opts.name || ''
     };
   };
 
-  /* Лицо: мягкие крупные глаза, живые брови, аккуратный рот. */
+  /* ======================================================================
+     Люди в мультяшном стиле «Городская пиццерия»: крупная голова, плотное
+     короткое тело, толстая тёплая обводка, плоские заливки, румянец,
+     руки-рукавицы. Пропорции одинаковые у всех, силуэты различаются
+     headScale (размер головы) и build (ширина тела).
+     ====================================================================== */
+
+  var INK = 'rgba(40,25,16,0.95)';
+  var BLUSH = 'rgba(226,104,82,0.45)';
+
+  // Единые метрики фигуры в долях роста (от стоп вверх)
+  function personMetrics(p, h) {
+    var hs = (p && p.headScale) || 1;
+    var wf = (p && p.build) || 1;
+    var headR = h * 0.135 * hs;
+    var shoulder = h * 0.605;
+    var headCY = shoulder + headR * 0.86;
+    return {
+      hs: hs,
+      wf: wf,
+      headR: headR,
+      headCY: headCY,
+      top: headCY + headR * 1.15,
+      shoulder: shoulder,
+      chest: h * 0.535,
+      waist: h * 0.472,
+      hip: h * 0.41,
+      shoulderW: h * 0.148 * wf
+    };
+  }
+  art.personMetrics = personMetrics;
+
+  // Крупная «яйцевидная» голова: шире в щеках, округлый подбородок
+  function headPath(ctx, headCY, R) {
+    ctx.beginPath();
+    ctx.moveTo(-R * 0.99, headCY - R * 0.32);
+    ctx.bezierCurveTo(-R * 1.0, headCY - R * 1.05, -R * 0.54, headCY - R * 1.16, 0, headCY - R * 1.16);
+    ctx.bezierCurveTo(R * 0.54, headCY - R * 1.16, R * 1.0, headCY - R * 1.05, R * 0.99, headCY - R * 0.32);
+    ctx.bezierCurveTo(R * 1.0, headCY + R * 0.28, R * 0.72, headCY + R * 0.96, 0, headCY + R * 1.0);
+    ctx.bezierCurveTo(-R * 0.72, headCY + R * 0.96, -R * 1.0, headCY + R * 0.28, -R * 0.99, headCY - R * 0.32);
+    ctx.closePath();
+  }
+
+  /* Лицо: крупные глаза с жирной обводкой и бликом, толстые брови,
+     румянец, простой рот. Никаких тонких линий и градиентов. */
+  // у светлых волос брови всё равно тёмные — иначе лицо «слепнет»
+  function browColor(c) {
+    if (!c || c.charAt(0) !== '#') return c || '#3a2a1d';
+    var v = c.slice(1);
+    if (v.length === 3) v = v[0] + v[0] + v[1] + v[1] + v[2] + v[2];
+    var r = parseInt(v.slice(0, 2), 16), g = parseInt(v.slice(2, 4), 16), b = parseInt(v.slice(4, 6), 16);
+    if (isNaN(r) || isNaN(g) || isNaN(b)) return c;
+    var lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return lum > 0.55 ? '#4a3423' : c;
+  }
+
   function drawFace(ctx, p, cx, cy, R, lw) {
-    var ink = 'rgba(56,38,28,0.92)';
     var female = !!p.female;
     var expr = p.expr || 'neutral';
-    var happy = expr === 'happy', angry = expr === 'angry' || expr === 'annoyed', sad = expr === 'sad',
-      conf = expr === 'confused', tired = expr === 'tired', annoy = expr === 'annoyed';
-    var ey = cy + R * 0.015;
-    var eo = R * 0.395;
-    var ew = R * (female ? 0.165 : 0.155), eh = R * (tired ? 0.13 : 0.175);
-    var eyeCol = p.eyeColor || '#5b3a28';
-    var iy = ey + R * (happy ? 0.02 : 0.015);
+    var happy = expr === 'happy',
+      snarl = expr === 'snarl',
+      angry = expr === 'angry' || expr === 'annoyed' || snarl,
+      sad = expr === 'sad',
+      conf = expr === 'confused',
+      tired = expr === 'tired';
+    var evil = !!p.evil;
+    var ink = 'rgba(32,20,13,0.96)';
+    var hairInk = browColor(p.hair);
+    var skinCol = P.skin[(p.skin == null ? 0 : p.skin) % P.skin.length];
+    var ey = cy + R * 0.03;
+    var eo = R * 0.375;
+    var eRX = R * (female ? 0.135 : 0.125) * (tired ? 0.9 : 1);
+    var eRY = R * (tired ? 0.11 : 0.16) * (angry ? 0.85 : 1) * (evil && !p.shades ? 0.82 : 1);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // тяжёлая тень над глазами — взгляд из-под бровей
+    if (evil) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy - R * 0.27, R * 0.92, R * 0.2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(28,14,8,0.15)';
+      ctx.fill();
+    }
 
     // брови
-    var browY = cy - R * 0.33;
-    ctx.lineCap = 'round';
+    var browY = cy - R * (evil ? 0.24 : 0.30);
     [-1, 1].forEach(function (s) {
       var bx = cx + s * eo;
-      ctx.strokeStyle = p.hair;
-      ctx.lineWidth = Math.max(1.5, R * 0.055);
+      ctx.strokeStyle = evil ? '#241611' : hairInk;
+      ctx.lineWidth = Math.max(2, R * (evil ? 0.115 : 0.085));
       ctx.beginPath();
       if (angry) {
-        ctx.moveTo(bx - s * R * 0.17, browY - R * 0.06);
-        ctx.quadraticCurveTo(bx, browY - R * 0.015, bx + s * R * 0.17, browY + R * 0.045);
+        // злые брови: внешний край вверх, внутренний — вниз, к переносице
+        ctx.moveTo(bx + s * R * 0.19, browY - R * (evil ? 0.17 : 0.13));
+        ctx.quadraticCurveTo(bx + s * R * 0.02, browY - R * 0.02, bx - s * R * 0.17, browY + R * 0.07);
       } else if (sad) {
-        ctx.moveTo(bx - s * R * 0.17, browY + R * 0.05);
-        ctx.quadraticCurveTo(bx, browY, bx + s * R * 0.17, browY - R * 0.045);
+        ctx.moveTo(bx - s * R * 0.17, browY + R * 0.08);
+        ctx.quadraticCurveTo(bx, browY, bx + s * R * 0.17, browY - R * 0.07);
       } else if (conf && s > 0) {
-        ctx.moveTo(bx - R * 0.16, browY - R * 0.095);
-        ctx.quadraticCurveTo(bx, browY - R * 0.075, bx + R * 0.15, browY - R * 0.035);
+        ctx.moveTo(bx - R * 0.16, browY - R * 0.16);
+        ctx.quadraticCurveTo(bx, browY - R * 0.11, bx + R * 0.15, browY - R * 0.02);
       } else if (tired) {
-        ctx.moveTo(bx - s * R * 0.16, browY);
-        ctx.quadraticCurveTo(bx, browY + R * 0.02, bx + s * R * 0.15, browY - R * 0.005);
+        ctx.moveTo(bx - s * R * 0.16, browY + R * 0.03);
+        ctx.quadraticCurveTo(bx, browY + R * 0.06, bx + s * R * 0.15, browY);
       } else {
-        ctx.moveTo(bx - s * R * 0.17, browY + R * 0.022);
-        ctx.quadraticCurveTo(bx, browY - R * 0.055, bx + s * R * 0.17, browY + R * 0.005);
+        ctx.moveTo(bx - s * R * 0.17, browY + R * 0.04);
+        ctx.quadraticCurveTo(bx, browY - R * 0.10, bx + s * R * 0.17, browY + R * 0.01);
       }
       ctx.stroke();
     });
 
-    // глаза
-    [-1, 1].forEach(function (s) {
-      var ex = cx + s * eo;
-      ctx.save();
-      ctx.beginPath();
-      ctx.ellipse(ex, ey, ew, eh, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#fbf3e8';
-      ctx.fill();
-      ctx.clip();
-      // радужка
-      ctx.beginPath();
-      ctx.arc(ex + (conf && s > 0 ? R * 0.03 : 0), iy, ew * 0.82, 0, Math.PI * 2);
-      ctx.fillStyle = eyeCol;
-      ctx.fill();
-      // зрачок
-      ctx.beginPath();
-      ctx.arc(ex + (conf && s > 0 ? R * 0.03 : 0), iy + R * 0.008, ew * 0.38, 0, Math.PI * 2);
-      ctx.fillStyle = '#241711';
-      ctx.fill();
-      // блики
-      ctx.beginPath();
-      ctx.arc(ex - ew * 0.34, iy - eh * 0.38, ew * 0.3, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.96)';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(ex + ew * 0.36, iy + eh * 0.35, ew * 0.14, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.fill();
-      // верхнее веко и тень под ним
-      ctx.beginPath();
-      ctx.ellipse(ex, ey, ew, eh, 0, Math.PI * 0.98, Math.PI * 2.02);
-      ctx.strokeStyle = 'rgba(58,40,30,0.9)';
-      ctx.lineWidth = Math.max(1.3, R * 0.045);
-      ctx.stroke();
-      ctx.restore();
-      // нижнее веко
-      ctx.beginPath();
-      ctx.ellipse(ex, ey + eh * 0.06, ew * 0.92, eh * 0.92, 0, Math.PI * 0.12, Math.PI * 0.88);
-      ctx.strokeStyle = 'rgba(120,84,62,0.26)';
-      ctx.lineWidth = Math.max(1, R * 0.028);
-      ctx.stroke();
-      // ресницы
-      if (female || p.lashes) {
-        ctx.strokeStyle = 'rgba(50,32,24,0.85)';
-        ctx.lineWidth = Math.max(1.1, R * 0.035);
+    // глаза: обычные, «злые» из-под бровей или тёмные очки
+    if (p.shades) {
+      [-1, 1].forEach(function (s) {
+        var lx = cx + s * eo;
         ctx.beginPath();
-        ctx.moveTo(ex + s * ew * 0.92, ey - eh * 0.6);
-        ctx.lineTo(ex + s * ew * 1.5, ey - eh * 0.98);
-        ctx.moveTo(ex + s * ew * 0.98, ey - eh * 0.25);
-        ctx.lineTo(ex + s * ew * 1.48, ey - eh * 0.52);
+        rr(ctx, lx - eRX * 1.35, ey - eRY * 0.95, eRX * 2.7, eRY * 1.9, eRY * 0.5);
+        ctx.fillStyle = '#120e0d';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(16,10,8,0.98)';
+        ctx.lineWidth = Math.max(2, R * 0.055);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(150,180,205,0.4)';
+        ctx.lineWidth = Math.max(1.4, R * 0.04);
+        ctx.beginPath();
+        ctx.moveTo(lx - eRX * 0.9, ey + eRY * 0.45);
+        ctx.lineTo(lx + eRX * 0.2, ey - eRY * 0.5);
+        ctx.stroke();
+      });
+      // перемычка и дужки
+      ctx.strokeStyle = 'rgba(16,10,8,0.95)';
+      ctx.lineWidth = Math.max(1.8, R * 0.05);
+      ctx.beginPath();
+      ctx.moveTo(cx - eRX * 0.6, ey - R * 0.02);
+      ctx.lineTo(cx + eRX * 0.6, ey - R * 0.02);
+      ctx.moveTo(cx - eo - eRX * 1.35, ey - R * 0.02);
+      ctx.lineTo(cx - R * 0.9, ey - R * 0.1);
+      ctx.moveTo(cx + eo + eRX * 1.35, ey - R * 0.02);
+      ctx.lineTo(cx + R * 0.9, ey - R * 0.1);
+      ctx.stroke();
+    } else {
+      [-1, 1].forEach(function (s) {
+        var ex = cx + s * eo;
+        var eyy = ey + (conf && s > 0 ? -R * 0.02 : 0);
+        if (evil) {
+          // злой прищур под тяжёлой бровью
+          ctx.beginPath();
+          ctx.ellipse(ex, eyy + eRY * 0.1, eRX * 1.08, eRY * 0.74, 0, 0, Math.PI * 2);
+          ctx.fillStyle = ink;
+          ctx.fill();
+          // обычный блик, только маленький
+          ctx.beginPath();
+          ctx.ellipse(ex - eRX * 0.26, eyy - eRY * 0.08, eRX * 0.2, eRY * 0.16, 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,250,242,0.8)';
+          ctx.fill();
+          return;
+        }
+        ctx.beginPath();
+        ctx.ellipse(ex, eyy, eRX, eRY, 0, 0, Math.PI * 2);
+        ctx.fillStyle = ink;
+        ctx.fill();
+        // блик
+        ctx.beginPath();
+        ctx.ellipse(ex - eRX * 0.32, eyy - eRY * 0.40, eRX * 0.44, eRY * 0.32, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,252,246,0.95)';
+        ctx.fill();
+        // ресницы
+        if (female) {
+          ctx.strokeStyle = ink;
+          ctx.lineWidth = Math.max(1.6, R * 0.05);
+          ctx.beginPath();
+          ctx.moveTo(ex + s * eRX * 0.7, eyy - eRY * 0.72);
+          ctx.lineTo(ex + s * eRX * 1.45, eyy - eRY * 1.05);
+          ctx.moveTo(ex + s * eRX * 0.95, eyy - eRY * 0.2);
+          ctx.lineTo(ex + s * eRX * 1.6, eyy - eRY * 0.42);
+          ctx.stroke();
+        }
+        // мешки под глазами
+        if (tired) {
+          ctx.strokeStyle = 'rgba(120,80,58,0.4)';
+          ctx.lineWidth = Math.max(1.2, R * 0.035);
+          ctx.beginPath();
+          ctx.arc(ex, eyy + eRY * 0.2, eRX * 0.9, Math.PI * 0.2, Math.PI * 0.8);
+          ctx.stroke();
+        }
+      });
+    }
+
+    // шрам через бровь и щёку
+    if (p.scar) {
+      ctx.strokeStyle = 'rgba(96,44,32,0.85)';
+      ctx.lineWidth = Math.max(2, R * 0.055);
+      ctx.beginPath();
+      ctx.moveTo(cx + R * 0.68, cy - R * 0.44);
+      ctx.quadraticCurveTo(cx + R * 0.58, cy + R * 0.1, cx + R * 0.46, cy + R * 0.64);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,222,200,0.55)';
+      ctx.lineWidth = Math.max(1.2, R * 0.022);
+      ctx.stroke();
+      // стежки
+      ctx.strokeStyle = 'rgba(90,42,30,0.7)';
+      ctx.lineWidth = Math.max(1.2, R * 0.03);
+      for (var si = 0; si < 3; si++) {
+        var sy = cy - R * 0.22 + si * R * 0.32;
+        ctx.beginPath();
+        ctx.moveTo(cx + R * 0.44, sy);
+        ctx.lineTo(cx + R * 0.74, sy - R * 0.05);
         ctx.stroke();
       }
-      if (tired) {
-        ctx.fillStyle = 'rgba(120,82,62,0.16)';
-        ctx.beginPath();
-        ctx.ellipse(ex, ey + eh * 0.55, ew * 0.8, eh * 0.25, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    });
+    }
 
-    // нос
-    ctx.strokeStyle = 'rgba(160,104,74,0.5)';
-    ctx.lineWidth = Math.max(1.2, R * 0.042);
-    ctx.beginPath();
-    ctx.moveTo(cx - R * 0.035, cy + R * 0.19);
-    ctx.quadraticCurveTo(cx + R * 0.055, cy + R * 0.27, cx - R * 0.01, cy + R * 0.29);
-    ctx.stroke();
-
-    // щёки
-    ctx.fillStyle = happy ? 'rgba(233,108,88,0.3)' : 'rgba(226,120,98,0.2)';
-    [-1, 1].forEach(function (s) {
+    // щетина
+    if (p.stubble) {
+      ctx.save();
       ctx.beginPath();
-      ctx.ellipse(cx + s * R * 0.57, cy + R * 0.32, R * 0.16, R * 0.085, 0, 0, Math.PI * 2);
+      ctx.moveTo(cx - R * 0.72, cy + R * 0.34);
+      ctx.quadraticCurveTo(cx - R * 0.62, cy + R * 1.0, cx, cy + R * 1.03);
+      ctx.quadraticCurveTo(cx + R * 0.62, cy + R * 1.0, cx + R * 0.72, cy + R * 0.34);
+      ctx.quadraticCurveTo(cx + R * 0.4, cy + R * 0.5, cx + R * 0.24, cy + R * 0.56);
+      ctx.quadraticCurveTo(cx, cy + R * 0.46, cx - R * 0.24, cy + R * 0.56);
+      ctx.quadraticCurveTo(cx - R * 0.4, cy + R * 0.5, cx - R * 0.72, cy + R * 0.34);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(38,26,20,0.28)';
       ctx.fill();
-    });
+      ctx.restore();
+    }
+
+    // нос — маленькая «кнопка»
+    ctx.beginPath();
+    ctx.ellipse(cx + R * 0.01, cy + R * 0.27, R * 0.075, R * 0.05, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(150,86,58,0.32)';
+    ctx.fill();
+
+    // румянец — только у добрых
+    if (!evil) {
+      ctx.fillStyle = happy ? 'rgba(230,96,76,0.55)' : BLUSH;
+      [-1, 1].forEach(function (s) {
+        ctx.beginPath();
+        ctx.ellipse(cx + s * R * 0.62, cy + R * 0.26, R * 0.2, R * 0.13, 0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
 
     // веснушки
     if (p.freckles) {
-      ctx.fillStyle = 'rgba(150,96,64,0.5)';
+      ctx.fillStyle = 'rgba(146,88,58,0.55)';
       for (var fi = 0; fi < 6; fi++) {
         var fs = fi < 3 ? -1 : 1;
-        var fx = cx + fs * R * (0.3 + (fi % 3) * 0.11);
-        var fy = cy + R * (0.19 + ((fi * 7) % 3) * 0.055);
+        var fx = cx + fs * R * (0.38 + (fi % 3) * 0.1);
+        var fy = cy + R * (0.22 + ((fi * 7) % 3) * 0.05);
         ctx.beginPath();
-        ctx.arc(fx, fy, R * 0.018, 0, Math.PI * 2);
+        ctx.arc(fx, fy, R * 0.022, 0, Math.PI * 2);
         ctx.fill();
       }
     }
 
-    // борода и усы
+    // борода и усы — плотным силуэтом
     if (p.beard) {
-      ctx.save();
-      ctx.fillStyle = p.hair;
-      ctx.globalAlpha = 0.92;
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.8, cy + R * 0.18);
-      ctx.quadraticCurveTo(cx - R * 0.86, cy + R * 0.78, cx - R * 0.34, cy + R * 1.02);
-      ctx.quadraticCurveTo(cx, cy + R * 1.1, cx + R * 0.34, cy + R * 1.02);
-      ctx.quadraticCurveTo(cx + R * 0.86, cy + R * 0.78, cx + R * 0.8, cy + R * 0.18);
-      ctx.quadraticCurveTo(cx + R * 0.5, cy + R * 0.42, cx + R * 0.3, cy + R * 0.56);
-      ctx.quadraticCurveTo(cx, cy + R * 0.42, cx - R * 0.3, cy + R * 0.56);
-      ctx.quadraticCurveTo(cx - R * 0.5, cy + R * 0.42, cx - R * 0.8, cy + R * 0.18);
+      ctx.moveTo(cx - R * 0.82, cy + R * 0.26);
+      ctx.quadraticCurveTo(cx - R * 0.92, cy + R * 0.82, cx - R * 0.34, cy + R * 1.03);
+      ctx.quadraticCurveTo(cx, cy + R * 1.11, cx + R * 0.34, cy + R * 1.03);
+      ctx.quadraticCurveTo(cx + R * 0.92, cy + R * 0.82, cx + R * 0.82, cy + R * 0.26);
+      // внутренний край по скулам — щёки остаются открытыми
+      ctx.quadraticCurveTo(cx + R * 0.56, cy + R * 0.4, cx + R * 0.3, cy + R * 0.5);
+      ctx.quadraticCurveTo(cx, cy + R * 0.38, cx - R * 0.3, cy + R * 0.5);
+      ctx.quadraticCurveTo(cx - R * 0.56, cy + R * 0.4, cx - R * 0.82, cy + R * 0.26);
       ctx.closePath();
+      ctx.fillStyle = p.hair;
       ctx.fill();
-      ctx.restore();
+      ctx.strokeStyle = 'rgba(28,17,11,0.55)';
+      ctx.lineWidth = Math.max(1.2, R * 0.04);
+      ctx.stroke();
+      // площадка под губами: борода не должна закрывать рот
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + R * 0.64, R * 0.29, R * 0.18, 0, 0, Math.PI * 2);
+      ctx.fillStyle = skinCol;
+      ctx.fill();
       // усы
       ctx.strokeStyle = p.hair;
-      ctx.lineWidth = Math.max(1.5, R * 0.05);
+      ctx.lineWidth = Math.max(2, R * 0.09);
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.2, cy + R * 0.47);
-      ctx.quadraticCurveTo(cx, cy + R * 0.4, cx + R * 0.2, cy + R * 0.47);
+      ctx.moveTo(cx - R * 0.24, cy + R * 0.41);
+      ctx.quadraticCurveTo(cx, cy + R * 0.32, cx + R * 0.24, cy + R * 0.41);
       ctx.stroke();
     }
 
     // рот
-    var my = cy + R * 0.6;
-    ctx.lineCap = 'round';
-    if (happy) {
+    var my = cy + R * 0.58;
+    if (snarl) {
+      // оскал: тёмный рот с зубами
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.22, my - R * 0.04);
-      ctx.quadraticCurveTo(cx, my + R * 0.22, cx + R * 0.22, my - R * 0.04);
-      ctx.quadraticCurveTo(cx, my + R * 0.08, cx - R * 0.22, my - R * 0.04);
+      ctx.moveTo(cx - R * 0.32, my - R * 0.04);
+      ctx.quadraticCurveTo(cx, my - R * 0.16, cx + R * 0.32, my - R * 0.04);
+      ctx.quadraticCurveTo(cx + R * 0.28, my + R * 0.22, cx + R * 0.16, my + R * 0.24);
+      ctx.quadraticCurveTo(cx, my + R * 0.3, cx - R * 0.16, my + R * 0.24);
+      ctx.quadraticCurveTo(cx - R * 0.28, my + R * 0.22, cx - R * 0.32, my - R * 0.04);
       ctx.closePath();
-      ctx.fillStyle = '#9c3f3b';
+      ctx.fillStyle = '#2a1210';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(80,38,30,0.6)';
-      ctx.lineWidth = Math.max(1.1, R * 0.035);
+      ctx.strokeStyle = 'rgba(30,14,10,0.95)';
+      ctx.lineWidth = Math.max(1.8, R * 0.055);
       ctx.stroke();
+      ctx.save();
+      ctx.clip();
+      ctx.fillStyle = '#f4ecdd';
+      ctx.fillRect(cx - R * 0.34, my - R * 0.06, R * 0.68, R * 0.15);
+      ctx.strokeStyle = 'rgba(50,26,20,0.5)';
+      ctx.lineWidth = Math.max(1, R * 0.022);
+      for (var ti = -1; ti <= 1; ti++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + ti * R * 0.16, my - R * 0.07);
+        ctx.lineTo(cx + ti * R * 0.16, my + R * 0.09);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if (happy) {
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.12, my + R * 0.035);
-      ctx.quadraticCurveTo(cx, my + R * 0.1, cx + R * 0.12, my + R * 0.035);
-      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-      ctx.lineWidth = Math.max(1, R * 0.03);
+      ctx.moveTo(cx - R * 0.24, my - R * 0.06);
+      ctx.quadraticCurveTo(cx, my + R * 0.3, cx + R * 0.24, my - R * 0.06);
+      ctx.quadraticCurveTo(cx, my + R * 0.02, cx - R * 0.24, my - R * 0.06);
+      ctx.closePath();
+      ctx.fillStyle = '#8e3a33';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(44,24,17,0.8)';
+      ctx.lineWidth = Math.max(1.4, R * 0.045);
       ctx.stroke();
     } else if (sad) {
       ctx.strokeStyle = ink;
-      ctx.lineWidth = Math.max(1.4, R * 0.045);
+      ctx.lineWidth = Math.max(2, R * 0.07);
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.19, my + R * 0.08);
-      ctx.quadraticCurveTo(cx, my - R * 0.05, cx + R * 0.19, my + R * 0.08);
+      ctx.moveTo(cx - R * 0.2, my + R * 0.08);
+      ctx.quadraticCurveTo(cx, my - R * 0.08, cx + R * 0.2, my + R * 0.08);
       ctx.stroke();
     } else if (angry) {
       ctx.strokeStyle = ink;
-      ctx.lineWidth = Math.max(1.4, R * 0.045);
+      ctx.lineWidth = Math.max(2, R * (evil ? 0.085 : 0.07));
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.2, my + R * 0.04);
-      ctx.quadraticCurveTo(cx, my + R * 0.11, cx + R * 0.2, my + R * 0.04);
+      ctx.moveTo(cx - R * (evil ? 0.26 : 0.21), my + R * 0.07);
+      ctx.quadraticCurveTo(cx, my - R * (evil ? 0.09 : 0.05), cx + R * (evil ? 0.26 : 0.21), my + R * 0.07);
       ctx.stroke();
     } else if (conf) {
       ctx.beginPath();
-      ctx.ellipse(cx, my + R * 0.02, R * 0.075, R * 0.095, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(145,74,64,0.4)';
+      ctx.ellipse(cx, my, R * 0.085, R * 0.11, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(122,58,50,0.55)';
       ctx.fill();
       ctx.strokeStyle = ink;
-      ctx.lineWidth = Math.max(1.2, R * 0.04);
+      ctx.lineWidth = Math.max(1.4, R * 0.05);
       ctx.stroke();
     } else if (tired) {
       ctx.strokeStyle = ink;
-      ctx.lineWidth = Math.max(1.2, R * 0.04);
+      ctx.lineWidth = Math.max(2, R * 0.06);
       ctx.beginPath();
       ctx.moveTo(cx - R * 0.16, my + R * 0.02);
-      ctx.quadraticCurveTo(cx, my + R * 0.05, cx + R * 0.16, my + R * 0.02);
+      ctx.lineTo(cx + R * 0.16, my + R * 0.02);
       ctx.stroke();
     } else {
-      var lip = female ? 'rgba(178,80,72,0.95)' : 'rgba(150,76,60,0.9)';
-      ctx.strokeStyle = lip;
-      ctx.lineWidth = Math.max(1.4, R * 0.048);
+      ctx.strokeStyle = female ? 'rgba(160,66,62,0.95)' : 'rgba(120,58,46,0.9)';
+      ctx.lineWidth = Math.max(2, R * 0.075);
       ctx.beginPath();
-      ctx.moveTo(cx - R * 0.2, my);
-      ctx.quadraticCurveTo(cx, my + R * 0.11, cx + R * 0.2, my);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(cx - R * 0.08, my + R * 0.03);
-      ctx.quadraticCurveTo(cx, my + R * 0.055, cx + R * 0.08, my + R * 0.03);
-      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-      ctx.lineWidth = Math.max(1, R * 0.026);
+      ctx.moveTo(cx - R * 0.2, my - R * 0.02);
+      ctx.quadraticCurveTo(cx, my + R * 0.15, cx + R * 0.2, my - R * 0.02);
       ctx.stroke();
     }
-    void annoy;
+
+    // сигара: зажата в правом углу рта, кончик торчит наружу
+    if (p.cigar) {
+      ctx.save();
+      ctx.translate(cx + R * 0.17, my + R * 0.03);
+      ctx.rotate(0.2);
+      rr(ctx, 0, -R * 0.052, R * 0.62, R * 0.104, R * 0.048);
+      ctx.fillStyle = '#4a2c18';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(28,16,10,0.85)';
+      ctx.lineWidth = Math.max(1.2, R * 0.03);
+      ctx.stroke();
+      // тлеющий кончик
+      ctx.beginPath();
+      ctx.arc(R * 0.58, 0, R * 0.058, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff7b34';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(R * 0.58, 0, R * 0.03, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffe6a0';
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
-  function headPath(ctx, headCY, R) {
-    ctx.beginPath();
-    ctx.moveTo(0, headCY - R * 1.02);
-    ctx.bezierCurveTo(R * 0.7, headCY - R * 1.03, R, headCY - R * 0.45, R, headCY + R * 0.05);
-    ctx.bezierCurveTo(R, headCY + R * 0.56, R * 0.68, headCY + R * 1.04, 0, headCY + R * 1.06);
-    ctx.bezierCurveTo(-R * 0.68, headCY + R * 1.04, -R, headCY + R * 0.56, -R, headCY + R * 0.05);
-    ctx.bezierCurveTo(-R, headCY - R * 0.45, -R * 0.7, headCY - R * 1.03, 0, headCY - R * 1.02);
-    ctx.closePath();
-  }
-
-  function hairBack(ctx, p, headCY, R) {
-    var c = p.hair;
+  function hairBack(ctx, p, headCY, R, lw) {
+    var c = p.hair || '#3a2a1d';
+    var dark = shade(c, -0.18);
     if (p.style === 'long') {
       ctx.beginPath();
-      ctx.moveTo(-R * 0.96, headCY - R * 0.15);
-      ctx.bezierCurveTo(-R * 1.32, headCY + R * 1.1, -R * 1.1, headCY + R * 3.4, -R * 0.8, headCY + R * 4.3);
-      ctx.quadraticCurveTo(0, headCY + R * 4.6, R * 0.8, headCY + R * 4.3);
-      ctx.bezierCurveTo(R * 1.1, headCY + R * 3.4, R * 1.32, headCY + R * 1.1, R * 0.96, headCY - R * 0.15);
+      ctx.moveTo(-R * 0.98, headCY - R * 0.55);
+      ctx.bezierCurveTo(-R * 1.38, headCY + R * 0.7, -R * 1.34, headCY + R * 2.3, -R * 1.06, headCY + R * 2.85);
+      ctx.quadraticCurveTo(0, headCY + R * 3.1, R * 1.06, headCY + R * 2.85);
+      ctx.bezierCurveTo(R * 1.34, headCY + R * 2.3, R * 1.38, headCY + R * 0.7, R * 0.98, headCY - R * 0.55);
       ctx.closePath();
-      ctx.fillStyle = shade(c, -0.16);
+      ctx.fillStyle = dark;
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.9;
+      ctx.stroke();
     } else if (p.style === 'bob') {
       ctx.beginPath();
-      ctx.ellipse(0, headCY + R * 0.12, R * 1.12, R * 1.2, 0, 0, Math.PI * 2);
-      ctx.fillStyle = shade(c, -0.12);
+      ctx.ellipse(0, headCY + R * 0.1, R * 1.16, R * 1.22, 0, 0, Math.PI * 2);
+      ctx.fillStyle = dark;
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.9;
+      ctx.stroke();
     } else if (p.style === 'bun') {
       ctx.beginPath();
-      ctx.arc(R * 0.52, headCY - R * 1.02, R * 0.32, 0, Math.PI * 2);
-      ctx.fillStyle = shade(c, -0.18);
+      ctx.arc(R * 0.5, headCY - R * 1.12, R * 0.38, 0, Math.PI * 2);
+      ctx.fillStyle = dark;
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.9;
+      ctx.stroke();
     } else if (p.style === 'curly') {
-      for (var i = 0; i < 12; i++) {
-        var a = Math.PI + (i / 11) * Math.PI;
-        var rr2 = R * (1.02 + (i % 3) * 0.05);
+      for (var i = 0; i < 9; i++) {
+        var a = Math.PI + (i / 8) * Math.PI;
+        var rr2 = R * (1.0 + (i % 3) * 0.06);
         ctx.beginPath();
-        ctx.arc(Math.cos(a) * rr2, headCY + Math.sin(a) * rr2 * 0.86 - R * 0.05, R * 0.26, 0, Math.PI * 2);
-        ctx.fillStyle = i % 2 ? c : shade(c, -0.14);
+        ctx.arc(Math.cos(a) * rr2, headCY + Math.sin(a) * rr2 * 0.9 - R * 0.02, R * 0.34, 0, Math.PI * 2);
+        ctx.fillStyle = i % 2 ? c : shade(c, -0.12);
         ctx.fill();
       }
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.85;
+      ctx.beginPath();
+      ctx.arc(0, headCY - R * 0.1, R * 1.14, Math.PI * 1.02, Math.PI * 1.98);
+      ctx.stroke();
     } else if (p.style === 'ponytail') {
       ctx.save();
-      ctx.translate(R * 1.0, headCY - R * 0.18);
-      ctx.rotate(0.18);
+      ctx.translate(R * 1.02, headCY - R * 0.1);
       ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.bezierCurveTo(R * 0.36, R * 0.5, R * 0.48, R * 1.2, R * 0.26, R * 1.75);
-      ctx.bezierCurveTo(R * 0.12, R * 2.05, -R * 0.22, R * 2.0, -R * 0.18, R * 1.6);
-      ctx.bezierCurveTo(-R * 0.1, R * 1.0, -R * 0.24, R * 0.5, -R * 0.2, 0);
+      ctx.moveTo(0, -R * 0.12);
+      ctx.bezierCurveTo(R * 0.55, R * 0.3, R * 0.62, R * 1.1, R * 0.3, R * 1.75);
+      ctx.bezierCurveTo(R * 0.1, R * 2.1, -R * 0.3, R * 1.95, -R * 0.26, R * 1.5);
+      ctx.bezierCurveTo(-R * 0.2, R * 0.95, -R * 0.3, R * 0.4, -R * 0.06, R * 0.02);
       ctx.closePath();
-      ctx.fillStyle = shade(c, -0.1);
+      ctx.fillStyle = c;
       ctx.fill();
-      // резинка
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.9;
+      ctx.stroke();
       ctx.beginPath();
-      ctx.ellipse(-R * 0.02, R * 0.03, R * 0.15, R * 0.075, 0.2, 0, Math.PI * 2);
+      ctx.ellipse(-R * 0.04, R * 0.04, R * 0.17, R * 0.1, 0.2, 0, Math.PI * 2);
       ctx.fillStyle = '#d0577f';
       ctx.fill();
       ctx.restore();
     }
   }
 
-  function hairFront(ctx, p, headCY, R) {
+  function hairFront(ctx, p, headCY, R, lw) {
     if (p.hat) return;
-    var c = p.hair;
+    var c = p.hair || '#3a2a1d';
     if (p.style === 'bald') {
-      ctx.save();
-      ctx.globalAlpha = 0.18;
-      ctx.strokeStyle = '#fff8ee';
-      ctx.lineWidth = R * 0.09;
+      ctx.strokeStyle = 'rgba(255,248,232,0.35)';
+      ctx.lineWidth = R * 0.1;
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.arc(0, headCY - R * 0.12, R * 0.72, Math.PI * 1.18, Math.PI * 1.48);
+      ctx.arc(0, headCY - R * 0.15, R * 0.62, Math.PI * 1.18, Math.PI * 1.46);
       ctx.stroke();
-      ctx.restore();
       return;
     }
-    var fringe = p.bangs ? 0.16 : 0.44;
-    // основная шапка волос
+    var topY = headCY - R * 1.16;
+    var fringe = p.bangs ? R * 0.46 : R * 0.62;
+    // шапка волос поверх черепа
     ctx.beginPath();
-    ctx.moveTo(-R * 1.02, headCY - R * 0.02);
-    ctx.bezierCurveTo(-R * 1.1, headCY - R * 0.95, -R * 0.52, headCY - R * 1.22, 0, headCY - R * 1.12);
-    ctx.bezierCurveTo(R * 0.52, headCY - R * 1.22, R * 1.1, headCY - R * 0.95, R * 1.02, headCY - R * 0.02);
-    if (p.style === 'bob' || p.style === 'long' || p.style === 'ponytail') {
-      ctx.quadraticCurveTo(R * 1.0, headCY + R * 0.3, R * 0.92, headCY + R * 0.78);
-      ctx.quadraticCurveTo(R * 0.72, headCY + R * 0.62, R * 0.72, headCY + R * 0.12);
-    } else if (p.style === 'curly') {
-      ctx.quadraticCurveTo(R * 0.9, headCY + R * 0.2, R * 0.82, headCY + R * 0.28);
-      ctx.quadraticCurveTo(R * 0.55, headCY + R * 0.1, R * 0.5, headCY - R * fringe * 0.4);
-    } else {
-      ctx.quadraticCurveTo(R * 0.86, headCY - R * 0.05, R * 0.68, headCY - R * 0.34);
+    ctx.moveTo(-R * 1.01, headCY - R * 0.06);
+    ctx.bezierCurveTo(-R * 1.16, headCY - R * 0.92, -R * 0.62, topY - R * 0.12, 0, topY - R * 0.1);
+    ctx.bezierCurveTo(R * 0.62, topY - R * 0.12, R * 1.16, headCY - R * 0.92, R * 1.01, headCY - R * 0.06);
+    if (p.style === 'long' || p.style === 'bob' || p.style === 'ponytail') {
+      ctx.quadraticCurveTo(R * 1.06, headCY + R * 0.5, R * 0.92, headCY + R * 0.9);
+      ctx.quadraticCurveTo(R * 0.72, headCY + R * 0.5, R * 0.74, headCY - R * 0.02);
     }
-    // линия чёлки / пробор
     if (p.bangs) {
-      ctx.quadraticCurveTo(R * 0.36, headCY - R * fringe * 0.82, R * 0.12, headCY - R * 0.37);
-      ctx.quadraticCurveTo(R * 0.0, headCY - R * 0.47, -R * 0.18, headCY - R * 0.38);
-      ctx.quadraticCurveTo(-R * 0.4, headCY - R * fringe * 0.8, -R * 0.68, headCY - R * 0.34);
+      ctx.quadraticCurveTo(R * 0.46, headCY - fringe, R * 0.16, headCY - fringe * 0.85);
+      ctx.quadraticCurveTo(R * 0.02, headCY - fringe * 0.62, -R * 0.18, headCY - fringe * 0.9);
+      ctx.quadraticCurveTo(-R * 0.5, headCY - fringe * 1.02, -R * 0.74, headCY - fringe * 0.55);
     } else {
-      ctx.quadraticCurveTo(R * 0.4, headCY - R * 0.5, R * 0.08, headCY - R * 0.58);
-      ctx.quadraticCurveTo(-R * 0.3, headCY - R * 0.55, -R * 0.68, headCY - R * 0.34);
+      ctx.quadraticCurveTo(R * 0.5, headCY - R * 0.86, R * 0.06, headCY - R * 0.94);
+      ctx.quadraticCurveTo(-R * 0.46, headCY - R * 0.84, -R * 0.74, headCY - R * 0.52);
     }
-    ctx.quadraticCurveTo(-R * 0.86, headCY - R * 0.05, -R * 1.02, headCY - R * 0.02);
+    ctx.quadraticCurveTo(-R * 0.92, headCY + R * 0.2, -R * 1.01, headCY - R * 0.06);
     ctx.closePath();
     ctx.fillStyle = c;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(45,28,18,0.32)';
-    ctx.lineWidth = Math.max(1, R * 0.03);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = lw * 0.9;
     ctx.stroke();
-    // завитки на висках у кудрявых
+    // плоский блик
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = '#fff8e8';
+    ctx.lineWidth = R * 0.14;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(0, headCY - R * 0.22, R * 0.66, Math.PI * 1.16, Math.PI * 1.44);
+    ctx.stroke();
+    ctx.restore();
+    // кудри
     if (p.style === 'curly') {
-      [[-0.78, -0.35], [0.78, -0.35], [-0.5, -0.85], [0.5, -0.85], [0, -1.0]].forEach(function (q) {
+      [[-0.86, -0.2], [0.86, -0.2], [-0.6, -0.78], [0.6, -0.78], [0, -1.02]].forEach(function (q) {
         ctx.beginPath();
-        ctx.arc(q[0] * R, headCY + q[1] * R, R * 0.24, 0, Math.PI * 2);
+        ctx.arc(q[0] * R, headCY + q[1] * R, R * 0.3, 0, Math.PI * 2);
         ctx.fillStyle = c;
         ctx.fill();
       });
     }
-    // блик
-    ctx.save();
-    ctx.globalAlpha = 0.22;
-    ctx.strokeStyle = '#fff8e8';
-    ctx.lineWidth = R * 0.12;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.arc(0, headCY - R * 0.28, R * 0.72, Math.PI * 1.2, Math.PI * 1.44);
-    ctx.stroke();
-    ctx.restore();
-    // лёгкая тень под чёлкой
-    ctx.save();
-    ctx.globalAlpha = 0.1;
-    ctx.fillStyle = '#3a2415';
-    ctx.beginPath();
-    ctx.ellipse(0, headCY - R * fringe * 0.5, R * 0.9, R * 0.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
   }
 
-  function drawHat(ctx, p, headCY, R) {
+  function drawHat(ctx, p, headCY, R, lw) {
     if (!p.hat) return;
     var hatCol = p.hat === 'cap' ? '#3f6f9a' : '#b0563f';
+    if (p.hat === 'fedora') {
+      // шляпа гангстера: широкие поля, примятая тулья, лента
+      var fc = p.hatColor || '#8e2440';
+      var fdark = shade(fc, -0.34);
+      // поля — низ и верх
+      ctx.beginPath();
+      ctx.ellipse(0, headCY - R * 0.7, R * 1.82, R * 0.3, 0, 0, Math.PI * 2);
+      ctx.fillStyle = fdark;
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+      var brim = ctx.createLinearGradient(-R * 1.8, 0, R * 1.8, 0);
+      brim.addColorStop(0, shade(fc, 0.14));
+      brim.addColorStop(0.5, fc);
+      brim.addColorStop(1, shade(fc, -0.2));
+      ctx.beginPath();
+      ctx.ellipse(0, headCY - R * 0.78, R * 1.78, R * 0.23, 0, 0, Math.PI * 2);
+      ctx.fillStyle = brim;
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+      // тулья — выше, с плоским верхом и примятием
+      ctx.beginPath();
+      ctx.moveTo(-R * 0.98, headCY - R * 0.74);
+      ctx.quadraticCurveTo(-R * 1.08, headCY - R * 1.34, -R * 0.66, headCY - R * 1.66);
+      ctx.quadraticCurveTo(-R * 0.3, headCY - R * 1.8, 0, headCY - R * 1.8);
+      ctx.quadraticCurveTo(R * 0.3, headCY - R * 1.8, R * 0.66, headCY - R * 1.66);
+      ctx.quadraticCurveTo(R * 1.08, headCY - R * 1.34, R * 0.98, headCY - R * 0.74);
+      ctx.closePath();
+      ctx.fillStyle = fc;
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+      // вмятина на тулье
+      ctx.strokeStyle = fdark;
+      ctx.lineWidth = Math.max(2, R * 0.075);
+      ctx.beginPath();
+      ctx.moveTo(-R * 0.42, headCY - R * 1.72);
+      ctx.quadraticCurveTo(0, headCY - R * 1.44, R * 0.42, headCY - R * 1.72);
+      ctx.stroke();
+      // лента
+      ctx.beginPath();
+      ctx.moveTo(-R * 0.95, headCY - R * 0.94);
+      ctx.quadraticCurveTo(0, headCY - R * 0.84, R * 0.95, headCY - R * 0.94);
+      ctx.lineTo(R * 0.93, headCY - R * 0.74);
+      ctx.quadraticCurveTo(0, headCY - R * 0.64, -R * 0.93, headCY - R * 0.74);
+      ctx.closePath();
+      ctx.fillStyle = shade(fc, -0.42);
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.7;
+      ctx.stroke();
+      // тень от полей на лице
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(0, headCY - R * 0.52, R * 1.3, R * 0.2, 0, 0, Math.PI);
+      ctx.fillStyle = 'rgba(24,10,8,0.22)';
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     if (p.hat === 'cap') {
       ctx.beginPath();
-      ctx.arc(0, headCY - R * 0.32, R * 1.04, Math.PI, 0);
-      ctx.lineTo(R * 1.04, headCY - R * 0.4);
-      ctx.lineTo(-R * 1.04, headCY - R * 0.4);
+      ctx.arc(0, headCY - R * 0.36, R * 1.08, Math.PI * 0.98, Math.PI * 2.02);
+      ctx.quadraticCurveTo(R * 1.02, headCY - R * 0.5, 0, headCY - R * 0.5);
+      ctx.quadraticCurveTo(-R * 1.02, headCY - R * 0.5, -R * 1.08, headCY - R * 0.36);
       ctx.closePath();
       ctx.fillStyle = hatCol;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(35,25,18,0.4)';
-      ctx.lineWidth = Math.max(1, R * 0.03);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
       ctx.stroke();
       // козырёк
       ctx.beginPath();
-      ctx.ellipse(R * 0.58, headCY - R * 0.4, R * 0.66, R * 0.15, 0.08, 0, Math.PI * 2);
-      ctx.fillStyle = shade(hatCol, -0.2);
+      ctx.ellipse(R * 0.62, headCY - R * 0.42, R * 0.64, R * 0.15, 0.06, 0, Math.PI * 2);
+      ctx.fillStyle = shade(hatCol, -0.22);
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.85;
+      ctx.stroke();
       // пуговка
       ctx.beginPath();
-      ctx.arc(0, headCY - R * 1.3, R * 0.08, 0, Math.PI * 2);
-      ctx.fillStyle = shade(hatCol, 0.25);
+      ctx.arc(0, headCY - R * 1.22, R * 0.09, 0, Math.PI * 2);
+      ctx.fillStyle = shade(hatCol, 0.3);
       ctx.fill();
     } else {
       ctx.beginPath();
-      ctx.arc(0, headCY - R * 0.34, R * 1.04, Math.PI * 0.98, Math.PI * 2.02);
-      ctx.quadraticCurveTo(R * 0.8, headCY - R * 0.5, 0, headCY - R * 0.5);
-      ctx.quadraticCurveTo(-R * 0.8, headCY - R * 0.5, -R * 1.04, headCY - R * 0.34);
+      ctx.arc(0, headCY - R * 0.34, R * 1.08, Math.PI * 0.98, Math.PI * 2.02);
+      ctx.quadraticCurveTo(R * 0.8, headCY - R * 0.52, 0, headCY - R * 0.52);
+      ctx.quadraticCurveTo(-R * 0.8, headCY - R * 0.52, -R * 1.08, headCY - R * 0.34);
       ctx.closePath();
       ctx.fillStyle = hatCol;
       ctx.fill();
-      // резинка
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+      // отворот
       ctx.beginPath();
-      ctx.moveTo(-R * 1.02, headCY - R * 0.5);
-      ctx.quadraticCurveTo(0, headCY - R * 0.64, R * 1.02, headCY - R * 0.5);
-      ctx.lineTo(R * 1.0, headCY - R * 0.28);
-      ctx.quadraticCurveTo(0, headCY - R * 0.42, -R * 1.0, headCY - R * 0.28);
+      ctx.moveTo(-R * 1.06, headCY - R * 0.54);
+      ctx.quadraticCurveTo(0, headCY - R * 0.72, R * 1.06, headCY - R * 0.54);
+      ctx.lineTo(R * 1.02, headCY - R * 0.24);
+      ctx.quadraticCurveTo(0, headCY - R * 0.44, -R * 1.02, headCY - R * 0.24);
       ctx.closePath();
-      ctx.fillStyle = shade(hatCol, 0.14);
+      ctx.fillStyle = shade(hatCol, 0.16);
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.85;
+      ctx.stroke();
       // помпон
       ctx.beginPath();
-      ctx.arc(0, headCY - R * 1.4, R * 0.2, 0, Math.PI * 2);
-      ctx.fillStyle = shade(hatCol, 0.3);
+      ctx.arc(0, headCY - R * 1.38, R * 0.24, 0, Math.PI * 2);
+      ctx.fillStyle = shade(hatCol, 0.34);
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.85;
+      ctx.stroke();
     }
   }
 
-  function drawGlasses(ctx, p, headCY, R) {
+  function drawGlasses(ctx, p, headCY, R, lw) {
     if (!p.glasses) return;
     var round = p.female || p.style === 'bob' || p.style === 'bun';
-    var ey = headCY + R * 0.015;
-    var eo = R * 0.395;
-    var w = R * 0.42, h2 = R * 0.36;
+    var ey = headCY + R * 0.03;
+    var eo = R * 0.40;
+    var w = R * 0.46, h2 = R * 0.4;
     [-1, 1].forEach(function (s) {
       var lx = s * eo - w / 2, ly = ey - h2 / 2;
       ctx.beginPath();
       if (round) ctx.ellipse(s * eo, ey, w / 2, h2 / 2, 0, 0, Math.PI * 2);
-      else rr(ctx, lx, ly, w, h2, R * 0.1);
-      ctx.fillStyle = 'rgba(198,228,238,0.18)';
+      else rr(ctx, lx, ly, w, h2, R * 0.12);
+      ctx.fillStyle = 'rgba(198,228,238,0.16)';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(46,38,32,0.88)';
-      ctx.lineWidth = Math.max(1.3, R * 0.045);
+      ctx.strokeStyle = 'rgba(38,28,22,0.96)';
+      ctx.lineWidth = Math.max(2, lw * 1.05);
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(lx + w * 0.18, ly + h2 * 0.78);
-      ctx.lineTo(lx + w * 0.42, ly + h2 * 0.2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.lineWidth = Math.max(1, R * 0.028);
+      ctx.moveTo(lx + w * 0.2, ly + h2 * 0.8);
+      ctx.lineTo(lx + w * 0.44, ly + h2 * 0.18);
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = Math.max(1.4, R * 0.05);
       ctx.stroke();
     });
     ctx.beginPath();
-    ctx.moveTo(-eo + w / 2, ey - R * 0.01);
-    ctx.quadraticCurveTo(0, ey - R * 0.06, eo - w / 2, ey - R * 0.01);
-    ctx.strokeStyle = 'rgba(46,38,32,0.88)';
-    ctx.lineWidth = Math.max(1.2, R * 0.04);
+    ctx.moveTo(-eo + w / 2, ey - R * 0.02);
+    ctx.quadraticCurveTo(0, ey - R * 0.1, eo - w / 2, ey - R * 0.02);
+    ctx.strokeStyle = 'rgba(38,28,22,0.96)';
+    ctx.lineWidth = Math.max(2, lw * 0.95);
     ctx.stroke();
   }
 
@@ -810,33 +1048,37 @@
    */
   function drawPerson(ctx, p, x, gy, h, opts) {
     opts = opts || {};
-    var lw = Math.max(1.05, h * 0.0058);
+    var M = personMetrics(p, h);
+    var lw = Math.max(1.4, h * 0.0115);
     var skin = P.skin[(p.skin == null ? 0 : p.skin) % P.skin.length];
-    var headR = h * 0.09;
-    var headCY = gy - h * 0.805;
-    var shoulder = gy - h * 0.675;
-    var neckBase = gy - h * 0.69;
-    var hip = gy - h * 0.445;
-    var waist = gy - h * 0.515;
-    var chest = gy - h * 0.615;
-    var sway = opts.sway || 0;
-    var walk = opts.walk || 0;
-    var alpha = opts.alpha == null ? 1 : opts.alpha;
-    var bob = walk ? Math.abs(Math.sin(walk)) * h * 0.01 : 0;
+    var skinShade = shade(skin, -0.17);
     var shirt = p.shirt || '#4a86b8';
     var pants = p.pants || '#3c4a5a';
     var coat = p.coat || null;
     var sleeve = coat || shirt;
-    var skinShade = shade(skin, -0.16);
-    var outline = 'rgba(48,32,22,0.72)';
+    var sway = opts.sway || 0;
+    var walk = opts.walk || 0;
+    var alpha = opts.alpha == null ? 1 : opts.alpha;
+    var bob = walk ? Math.abs(Math.sin(walk)) * h * 0.012 : 0;
+    var headR = M.headR;
+    var headCY = gy - M.headCY;
+    var shoulder = gy - M.shoulder;
+    var chest = gy - M.chest;
+    var waist = gy - M.waist;
+    var hip = gy - M.hip;
+    var sw = M.shoulderW;
+    var bw = h * 0.14 * M.wf;
+    var hw = h * 0.118 * M.wf;
 
     ctx.save();
     ctx.globalAlpha = alpha;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
 
     // тень
     if (!opts.noShadow) {
       ctx.beginPath();
-      ctx.ellipse(x, gy - h * 0.004, h * 0.115, h * 0.024, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, gy - h * 0.006, h * 0.125, h * 0.026, 0, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(55,35,22,0.17)';
       ctx.fill();
     }
@@ -845,49 +1087,45 @@
     if (sway) ctx.translate(0, Math.sin(sway) * h * 0.004);
     if (walk) ctx.translate(0, -bob);
 
-    function shape(pathFn, fill, stroke, lw2) {
-      ctx.beginPath();
-      pathFn();
-      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-      if (stroke !== false) {
-        ctx.strokeStyle = stroke || outline;
-        ctx.lineWidth = lw2 || lw;
-        ctx.stroke();
-      }
+    function torsoPath() {
+      ctx.moveTo(-sw * 0.7, shoulder - h * 0.012);
+      ctx.quadraticCurveTo(-sw * 1.02, shoulder - h * 0.006, -sw, shoulder + h * 0.03);
+      ctx.quadraticCurveTo(-bw * 1.03, chest, -bw, waist);
+      ctx.quadraticCurveTo(-hw * 1.08, hip - h * 0.02, -hw, hip + h * 0.008);
+      ctx.quadraticCurveTo(0, hip + h * 0.032, hw, hip + h * 0.008);
+      ctx.quadraticCurveTo(hw * 1.08, hip - h * 0.02, bw, waist);
+      ctx.quadraticCurveTo(bw * 1.03, chest, sw, shoulder + h * 0.03);
+      ctx.quadraticCurveTo(sw * 1.02, shoulder - h * 0.006, sw * 0.7, shoulder - h * 0.012);
+      ctx.quadraticCurveTo(0, shoulder - h * 0.036, -sw * 0.7, shoulder - h * 0.012);
+      ctx.closePath();
     }
 
-    // упрощённый силуэт для отражений и окон
+    // упрощённый силуэт для отражений, окон и ночных сцен
     if (opts.silhouette) {
       var sil = opts.silhouette;
       ctx.fillStyle = sil;
       ctx.strokeStyle = sil;
       ctx.lineWidth = lw;
+      var legLenS = gy - hip;
       [-1, 1].forEach(function (s) {
-        var sx = s * h * 0.046;
-        rr(ctx, sx - h * 0.035, hip, h * 0.07, gy - hip - h * 0.01, h * 0.026);
+        rr(ctx, s * h * 0.052 * M.wf - h * 0.046 * M.wf, hip - h * 0.01, h * 0.092 * M.wf, legLenS, h * 0.03);
         ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(sx, gy - h * 0.025, h * 0.05, h * 0.03, 0, 0, Math.PI * 2);
+        rr(ctx, s * h * 0.052 * M.wf - h * 0.05, gy - h * 0.05, h * 0.1, h * 0.05, h * 0.02);
         ctx.fill();
       });
       ctx.beginPath();
-      ctx.moveTo(-h * 0.112, shoulder);
-      ctx.quadraticCurveTo(0, shoulder - h * 0.02, h * 0.112, shoulder);
-      ctx.quadraticCurveTo(h * 0.096, hip + h * 0.02, h * 0.09, hip + h * 0.02);
-      ctx.lineTo(-h * 0.09, hip + h * 0.02);
-      ctx.quadraticCurveTo(-h * 0.096, hip + h * 0.02, -h * 0.112, shoulder);
-      ctx.closePath();
+      torsoPath();
       ctx.fill();
       [-1, 1].forEach(function (s) {
-        rr(ctx, s * h * 0.105 - h * 0.026, shoulder, h * 0.052, h * 0.2, h * 0.026);
+        rr(ctx, s * sw * 0.94 - h * 0.028, shoulder, h * 0.056, h * 0.2, h * 0.028);
         ctx.fill();
       });
       ctx.beginPath();
-      ctx.ellipse(0, headCY, headR, headR * 1.1, 0, 0, Math.PI * 2);
+      headPath(ctx, headCY, headR);
       ctx.fill();
       if (p.style !== 'bald') {
         ctx.beginPath();
-        ctx.ellipse(0, headCY - headR * 0.18, headR * 1.1, headR * 0.95, 0, Math.PI, Math.PI * 2);
+        ctx.arc(0, headCY - headR * 0.1, headR * 1.06, Math.PI, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
@@ -895,328 +1133,402 @@
     }
 
     // волосы за спиной
-    hairBack(ctx, p, headCY, headR);
+    hairBack(ctx, p, headCY, headR, lw);
 
     // рюкзак за спиной
     if (p.bag === 'backpack' && !opts.noBag) {
-      fillRR(ctx, -h * 0.1, chest - h * 0.01, h * 0.2, h * 0.17, h * 0.035, '#4f6a5c');
-      ctx.strokeStyle = 'rgba(35,45,38,0.4)';
+      rr(ctx, -h * 0.098 * M.wf, shoulder + h * 0.005, h * 0.196 * M.wf, h * 0.16, h * 0.04);
+      ctx.fillStyle = '#51705f';
+      ctx.fill();
+      ctx.strokeStyle = INK;
       ctx.lineWidth = lw;
-      rr(ctx, -h * 0.1, chest - h * 0.01, h * 0.2, h * 0.17, h * 0.035);
       ctx.stroke();
+      rr(ctx, -h * 0.07 * M.wf, shoulder + h * 0.06, h * 0.14 * M.wf, h * 0.045, h * 0.02);
+      ctx.fillStyle = '#3f5a4c';
+      ctx.fill();
     }
+
+    var legLen = gy - hip;
+    var legTopW = h * 0.102 * M.wf;
+    var legBotW = h * 0.086 * M.wf;
 
     // ноги и обувь
-    var legLen = gy - hip;
     [-1, 1].forEach(function (s) {
-      var swing = walk ? Math.sin(walk + (s > 0 ? Math.PI : 0)) * 0.09 : 0;
+      var swing = walk ? Math.sin(walk + (s > 0 ? Math.PI : 0)) * 0.14 : 0;
       ctx.save();
-      ctx.translate(s * h * 0.047, hip);
+      ctx.translate(s * h * 0.055 * M.wf, hip);
       ctx.rotate(swing);
-      var topW = h * 0.072, botW = h * 0.052;
+      // штанина
       ctx.beginPath();
-      ctx.moveTo(-topW / 2, 0);
-      ctx.quadraticCurveTo(-topW * 0.52, legLen * 0.46, -botW * 0.56, legLen * 0.84);
-      ctx.lineTo(-botW * 0.5, legLen * 0.92);
-      ctx.lineTo(botW * 0.5, legLen * 0.92);
-      ctx.lineTo(botW * 0.56, legLen * 0.84);
-      ctx.quadraticCurveTo(topW * 0.52, legLen * 0.46, topW / 2, 0);
+      ctx.moveTo(-legTopW / 2, -h * 0.012);
+      ctx.lineTo(legTopW / 2, -h * 0.012);
+      ctx.lineTo(legBotW / 2, legLen - h * 0.012);
+      ctx.lineTo(-legBotW / 2, legLen - h * 0.012);
       ctx.closePath();
-      var lg = ctx.createLinearGradient(-topW / 2, 0, topW / 2, 0);
-      lg.addColorStop(0, shade(pants, 0.1));
-      lg.addColorStop(0.55, pants);
-      lg.addColorStop(1, shade(pants, -0.2));
-      ctx.fillStyle = lg;
+      ctx.fillStyle = pants;
       ctx.fill();
-      ctx.strokeStyle = outline;
+      ctx.strokeStyle = INK;
       ctx.lineWidth = lw;
       ctx.stroke();
-      // манжета
-      ctx.fillStyle = shade(pants, -0.16);
-      ctx.fillRect(-botW * 0.52, legLen * 0.855, botW * 1.04, h * 0.014);
-      // кроссовок
-      var shoeW = h * 0.05, shoeH = h * 0.028;
-      ctx.beginPath();
-      ctx.ellipse(s * h * 0.003, legLen * 0.955, shoeW, shoeH, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#f2eee6';
+      // цел-тень по правому краю
+      ctx.save();
+      ctx.clip();
+      ctx.fillStyle = 'rgba(30,20,14,0.16)';
+      ctx.fillRect(legBotW * 0.1, -h * 0.02, legTopW, legLen);
+      ctx.restore();
+      // ботинок
+      var shoeW = h * 0.098, shoeH = h * 0.056;
+      rr(ctx, -shoeW * 0.5 + s * h * 0.004, legLen - shoeH, shoeW, shoeH, shoeH * 0.45);
+      ctx.fillStyle = '#efe7d8';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(55,42,34,0.55)';
-      ctx.lineWidth = lw * 0.9;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
       ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(s * h * 0.003, legLen * 0.975, shoeW * 0.98, shoeH * 0.42, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#3f444c';
+      // подошва
+      rr(ctx, -shoeW * 0.52 + s * h * 0.004, legLen - shoeH * 0.3, shoeW * 1.04, shoeH * 0.3, shoeH * 0.12);
+      ctx.fillStyle = '#40464e';
       ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(-shoeW * 0.45, legLen * 0.94);
-      ctx.quadraticCurveTo(0, legLen * 0.925, shoeW * 0.45, legLen * 0.94);
-      ctx.strokeStyle = shade(shirt, -0.05);
-      ctx.lineWidth = Math.max(1.2, h * 0.007);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.8;
       ctx.stroke();
       ctx.restore();
     });
 
-    // руки
-    var armLen = h * 0.195;
-    [-1, 1].forEach(function (s) {
-      var angle = opts.handsUp ? s * 2.05 : s * 0.055 + (walk ? Math.sin(walk + (s > 0 ? 0 : Math.PI)) * 0.11 : 0);
+    // руки рисуем поверх торса: в мультяшном стиле у них свой жирный контур
+    function drawArms() {
+      var armLen = h * 0.205;
+      var armW = h * 0.062 * M.wf;
+      var handR = h * 0.046;
+      // «руки скрещены на груди» — поза головорезов
+      if (p.armsCrossed) {
+        ctx.save();
+        ctx.lineCap = 'round';
+        var elbowY = chest + h * 0.05;
+        var cw = armW * 0.78;
+        [{ s: 1, dy: 0.028 }, { s: -1, dy: 0.004 }].forEach(function (a) {
+          var s = a.s;
+          var elbowX = s * sw * 0.86;
+          // плечо вниз до локтя
+          ctx.beginPath();
+          ctx.moveTo(s * sw * 0.88, shoulder + h * 0.034);
+          ctx.lineTo(elbowX, elbowY - h * 0.008);
+          ctx.strokeStyle = INK;
+          ctx.lineWidth = cw + lw * 2;
+          ctx.stroke();
+          ctx.strokeStyle = shade(sleeve, 0.05);
+          ctx.lineWidth = cw;
+          ctx.stroke();
+          // предплечье поперёк груди
+          var hy = elbowY + h * a.dy;
+          var hx = -s * h * 0.086;
+          ctx.beginPath();
+          ctx.moveTo(elbowX, elbowY);
+          ctx.quadraticCurveTo(s * h * 0.02, hy - h * 0.012, hx, hy);
+          ctx.strokeStyle = INK;
+          ctx.lineWidth = cw + lw * 2;
+          ctx.stroke();
+          ctx.strokeStyle = shade(sleeve, 0.09);
+          ctx.lineWidth = cw;
+          ctx.stroke();
+          // манжета
+          ctx.beginPath();
+          ctx.moveTo(hx + s * cw * 0.5, hy);
+          ctx.lineTo(hx + s * cw * 0.95, hy);
+          ctx.strokeStyle = shade(sleeve, -0.28);
+          ctx.lineWidth = cw * 0.9;
+          ctx.stroke();
+          // кулак
+          ctx.beginPath();
+          ctx.arc(hx + s * cw * 0.1, hy, handR * 0.78, 0, Math.PI * 2);
+          ctx.fillStyle = skin;
+          ctx.fill();
+          ctx.strokeStyle = INK;
+          ctx.lineWidth = lw;
+          ctx.stroke();
+          // костяшки
+          ctx.strokeStyle = 'rgba(80,44,30,0.45)';
+          ctx.lineWidth = Math.max(1.2, h * 0.005);
+          for (var k = 0; k < 3; k++) {
+            ctx.beginPath();
+            ctx.moveTo(hx + s * cw * 0.1 - s * handR * (0.28 + k * 0.2), hy - handR * 0.42);
+            ctx.lineTo(hx + s * cw * 0.1 - s * handR * (0.28 + k * 0.2), hy + handR * 0.02);
+            ctx.stroke();
+          }
+        });
+        ctx.restore();
+        return;
+      }
+      [-1, 1].forEach(function (s) {
+      // жест «руки вверх» — наружу и вверх, иначе кисти прячутся за большой головой
+      var angle = (opts.handsUp && !p.evil) ? -s * 2.3 : s * 0.15 + (walk ? Math.sin(walk + (s > 0 ? 0 : Math.PI)) * 0.1 : 0);
       ctx.save();
-      ctx.translate(s * h * 0.107, shoulder + h * 0.012);
+      ctx.translate(s * sw * 0.98, shoulder + h * 0.05);
       ctx.rotate(angle);
-      var wTop = h * 0.054, wBot = h * 0.041;
-      ctx.beginPath();
-      ctx.moveTo(-wTop / 2, 0);
-      ctx.quadraticCurveTo(0, -wTop * 0.34, wTop / 2, 0);
-      ctx.quadraticCurveTo(wTop * 0.55, armLen * 0.55, wBot / 2, armLen * 0.88);
-      ctx.quadraticCurveTo(0, armLen * 1.0, -wBot / 2, armLen * 0.88);
-      ctx.quadraticCurveTo(-wTop * 0.55, armLen * 0.55, -wTop / 2, 0);
-      ctx.closePath();
-      var ag = ctx.createLinearGradient(-wTop / 2, 0, wTop / 2, armLen);
-      ag.addColorStop(0, shade(sleeve, 0.12));
-      ag.addColorStop(0.5, sleeve);
-      ag.addColorStop(1, shade(sleeve, -0.18));
-      ctx.fillStyle = ag;
+      var shortSleeve = p.sleeves === 'short' && !coat;
+      var sleeveLen = shortSleeve ? armLen * 0.48 : armLen;
+      // рукав
+      rr(ctx, -armW / 2, -armW * 0.35, armW, sleeveLen + armW * 0.35, armW / 2);
+      ctx.fillStyle = sleeve;
       ctx.fill();
-      ctx.strokeStyle = outline;
+      ctx.strokeStyle = INK;
       ctx.lineWidth = lw;
       ctx.stroke();
-      // манжета, если рукав длинный
-      if (p.sleeves !== 'short' || coat) {
-        ctx.fillStyle = shade(sleeve, -0.18);
-        ctx.fillRect(-wBot * 0.55, armLen * 0.82, wBot * 1.1, h * 0.016);
+      if (shortSleeve) {
+        // предплечье
+        rr(ctx, -armW * 0.4, sleeveLen - armW * 0.25, armW * 0.8, armLen - sleeveLen + armW * 0.3, armW * 0.4);
+        ctx.fillStyle = skin;
+        ctx.fill();
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = lw;
+        ctx.stroke();
+      } else {
+        // манжета
+        rr(ctx, -armW * 0.54, armLen - h * 0.022, armW * 1.08, h * 0.024, h * 0.009);
+        ctx.fillStyle = shade(sleeve, -0.24);
+        ctx.fill();
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = lw * 0.8;
+        ctx.stroke();
       }
-      // кисть
+      // рукавица
       ctx.beginPath();
-      ctx.ellipse(0, armLen + h * 0.014, h * 0.029, h * 0.032, 0, 0, Math.PI * 2);
+      ctx.arc(0, armLen + handR * 0.5, handR, 0, Math.PI * 2);
       ctx.fillStyle = skin;
       ctx.fill();
-      ctx.strokeStyle = outline;
-      ctx.lineWidth = lw * 0.9;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
       ctx.stroke();
+      // большой палец
       ctx.beginPath();
-      ctx.arc(-s * h * 0.015, armLen + h * 0.022, h * 0.011, 0, Math.PI * 2);
-      ctx.fillStyle = shade(skin, 0.06);
+      ctx.ellipse(-s * handR * 0.6, armLen + handR * 0.5 - handR * 0.15, handR * 0.42, handR * 0.5, -s * 0.3, 0, Math.PI * 2);
+      ctx.fillStyle = skinShade;
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.7;
+      ctx.stroke();
       ctx.restore();
-    });
-
-    // шея
-    ctx.beginPath();
-    ctx.moveTo(-headR * 0.17, headCY + headR * 0.94);
-    ctx.lineTo(headR * 0.17, headCY + headR * 0.94);
-    ctx.lineTo(headR * 0.22, shoulder + h * 0.026);
-    ctx.lineTo(-headR * 0.22, shoulder + h * 0.026);
-    ctx.closePath();
-    ctx.fillStyle = skinShade;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(60,40,28,0.35)';
-    ctx.lineWidth = lw * 0.8;
-    ctx.stroke();
+      });
+    }
 
     // торс
-    function torsoPath() {
-      var sw = h * 0.112;
-      ctx.moveTo(-sw, shoulder + h * 0.004);
-      ctx.quadraticCurveTo(-sw * 0.86, shoulder - h * 0.014, -sw * 0.46, shoulder - h * 0.016);
-      ctx.quadraticCurveTo(0, shoulder - h * 0.02, sw * 0.46, shoulder - h * 0.016);
-      ctx.quadraticCurveTo(sw * 0.86, shoulder - h * 0.014, sw, shoulder + h * 0.004);
-      ctx.quadraticCurveTo(sw * 0.97, chest, sw * 0.84, waist);
-      ctx.quadraticCurveTo(sw * 0.82, hip - h * 0.004, sw * 0.8, hip + h * 0.012);
-      ctx.quadraticCurveTo(0, hip + h * 0.026, -sw * 0.8, hip + h * 0.012);
-      ctx.quadraticCurveTo(-sw * 0.82, hip - h * 0.004, -sw * 0.84, waist);
-      ctx.quadraticCurveTo(-sw * 0.99, chest, -sw, shoulder + h * 0.004);
-      ctx.closePath();
-    }
-    shape(torsoPath, shirt);
+    ctx.beginPath();
+    torsoPath();
+    ctx.fillStyle = shirt;
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = lw;
+    ctx.stroke();
+
+    // цел-тень справа + плоские детали одежды
     ctx.save();
     ctx.beginPath();
     torsoPath();
     ctx.clip();
-    var tg = ctx.createLinearGradient(-h * 0.12, shoulder, h * 0.12, hip);
-    tg.addColorStop(0, 'rgba(255,255,255,0.2)');
-    tg.addColorStop(0.45, 'rgba(255,255,255,0)');
-    tg.addColorStop(1, 'rgba(30,18,10,0.26)');
-    ctx.fillStyle = tg;
-    ctx.fillRect(-h * 0.15, shoulder - h * 0.04, h * 0.3, hip - shoulder + h * 0.09);
-    //Patterns
+    ctx.fillStyle = 'rgba(32,20,12,0.14)';
+    ctx.fillRect(h * 0.045, shoulder - h * 0.05, h * 0.4, hip - shoulder + h * 0.1);
     if (p.pattern === 'stripe') {
-      ctx.fillStyle = 'rgba(255,248,232,0.55)';
-      ctx.fillRect(-h * 0.12, chest + h * 0.008, h * 0.24, h * 0.03);
-      ctx.fillRect(-h * 0.12, chest + h * 0.055, h * 0.24, h * 0.012);
+      ctx.fillStyle = 'rgba(255,248,232,0.5)';
+      ctx.fillRect(-h * 0.16, chest + h * 0.005, h * 0.32, h * 0.032);
+      ctx.fillRect(-h * 0.16, chest + h * 0.055, h * 0.32, h * 0.014);
     } else if (p.pattern === 'pocket') {
-      ctx.strokeStyle = 'rgba(30,20,12,0.22)';
-      ctx.lineWidth = Math.max(1, lw * 0.8);
-      rr(ctx, -h * 0.07, chest + h * 0.02, h * 0.055, h * 0.045, h * 0.008);
+      ctx.strokeStyle = 'rgba(28,18,10,0.35)';
+      ctx.lineWidth = Math.max(1.4, lw * 0.8);
+      rr(ctx, -h * 0.075, chest + h * 0.02, h * 0.06, h * 0.05, h * 0.012);
       ctx.stroke();
     } else if (p.pattern === 'badge') {
       ctx.beginPath();
-      ctx.arc(h * 0.06, chest + h * 0.02, h * 0.014, 0, Math.PI * 2);
+      ctx.arc(h * 0.06, chest + h * 0.02, h * 0.016, 0, Math.PI * 2);
       ctx.fillStyle = '#ffd479';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(80,55,20,0.5)';
+      ctx.strokeStyle = 'rgba(70,48,20,0.6)';
       ctx.lineWidth = Math.max(1, lw * 0.6);
       ctx.stroke();
     }
     ctx.restore();
-    // подол
-    ctx.beginPath();
-    ctx.moveTo(-h * 0.085, hip + h * 0.01);
-    ctx.quadraticCurveTo(0, hip + h * 0.024, h * 0.085, hip + h * 0.01);
-    ctx.strokeStyle = 'rgba(30,18,10,0.25)';
-    ctx.lineWidth = Math.max(1, lw * 0.8);
-    ctx.stroke();
-    // ворот
-    ctx.beginPath();
-    if (p.collar === 'v') {
-      ctx.moveTo(-h * 0.04, shoulder - h * 0.012);
-      ctx.lineTo(0, shoulder + h * 0.05);
-      ctx.lineTo(h * 0.04, shoulder - h * 0.012);
-    } else if (p.collar === 'polo') {
-      ctx.moveTo(-h * 0.045, shoulder - h * 0.014);
-      ctx.lineTo(-h * 0.012, shoulder + h * 0.026);
-      ctx.lineTo(0, shoulder + h * 0.006);
-      ctx.lineTo(h * 0.012, shoulder + h * 0.026);
-      ctx.lineTo(h * 0.045, shoulder - h * 0.014);
-    } else {
-      ctx.ellipse(0, shoulder - h * 0.006, h * 0.05, h * 0.024, 0, 0.1, Math.PI - 0.1);
-    }
-    ctx.strokeStyle = 'rgba(25,15,9,0.35)';
-    ctx.lineWidth = Math.max(1.2, lw);
-    ctx.stroke();
-    // воротник-резинка
-    ctx.beginPath();
-    ctx.ellipse(0, shoulder - h * 0.002, h * 0.047, h * 0.018, 0, Math.PI * 0.12, Math.PI * 0.88);
-    ctx.strokeStyle = shade(shirt, -0.3);
-    ctx.lineWidth = Math.max(1.4, h * 0.008);
-    ctx.stroke();
-    // пуговицы
-    if (p.pattern !== 'stripe' || true) {
-      ctx.fillStyle = 'rgba(255,248,232,0.35)';
-      for (var bi = 0; bi < 2; bi++) {
-        ctx.beginPath();
-        ctx.arc(0, chest + h * 0.035 + bi * h * 0.042, Math.max(1.1, h * 0.0045), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    // ремень
-    ctx.fillStyle = 'rgba(48,32,22,0.75)';
-    ctx.fillRect(-h * 0.086, hip - h * 0.006, h * 0.172, h * 0.015);
-    ctx.fillStyle = 'rgba(255,215,150,0.75)';
-    ctx.fillRect(-h * 0.011, hip - h * 0.006, h * 0.022, h * 0.015);
 
-    // верхняя одежда
+    // галстук под пиджаком
+    if (p.tie) {
+      ctx.beginPath();
+      ctx.moveTo(-h * 0.024, shoulder + h * 0.004);
+      ctx.lineTo(h * 0.024, shoulder + h * 0.004);
+      ctx.lineTo(h * 0.034, waist - h * 0.004);
+      ctx.lineTo(0, hip + h * 0.004);
+      ctx.lineTo(-h * 0.034, waist - h * 0.004);
+      ctx.closePath();
+      ctx.fillStyle = p.tie;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(20,12,8,0.75)';
+      ctx.lineWidth = Math.max(1.2, lw * 0.6);
+      ctx.stroke();
+      // узел
+      rr(ctx, -h * 0.026, shoulder - h * 0.004, h * 0.052, h * 0.03, h * 0.008);
+      ctx.fillStyle = shade(p.tie, 0.14);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(20,12,8,0.75)';
+      ctx.lineWidth = Math.max(1.2, lw * 0.6);
+      ctx.stroke();
+    }
+
+    // верхняя одежда: пиджак застёгнут на талии, вверху — V-образный вырез
     if (coat) {
       [-1, 1].forEach(function (s) {
         ctx.beginPath();
-        ctx.moveTo(s * h * 0.116, shoulder + h * 0.006);
-        ctx.lineTo(s * h * 0.104, waist + h * 0.015);
-        ctx.lineTo(s * h * 0.096, hip + h * 0.02);
-        ctx.lineTo(s * h * 0.016, hip + h * 0.02);
-        ctx.lineTo(s * h * 0.03, waist);
-        ctx.lineTo(s * h * 0.056, shoulder + h * 0.012);
+        ctx.moveTo(s * sw * 0.98, shoulder + h * 0.028);
+        ctx.lineTo(s * bw * 1.0, waist);
+        ctx.lineTo(s * hw * 1.04, hip + h * 0.012);
+        ctx.lineTo(s * h * 0.022, hip + h * 0.012);
+        ctx.lineTo(s * h * 0.05, waist - h * 0.002);
+        ctx.lineTo(s * sw * 0.34, shoulder - h * 0.006);
         ctx.closePath();
-        var cg = ctx.createLinearGradient(0, shoulder, 0, hip);
-        cg.addColorStop(0, shade(coat, 0.12));
-        cg.addColorStop(1, shade(coat, -0.16));
-        ctx.fillStyle = cg;
+        ctx.fillStyle = shade(coat, -0.04);
         ctx.fill();
-        ctx.strokeStyle = outline;
+        ctx.strokeStyle = INK;
         ctx.lineWidth = lw;
         ctx.stroke();
       });
       // лацканы
       [-1, 1].forEach(function (s) {
         ctx.beginPath();
-        ctx.moveTo(s * h * 0.052, shoulder + h * 0.01);
-        ctx.lineTo(s * h * 0.02, chest + h * 0.02);
-        ctx.lineTo(s * h * 0.058, chest + h * 0.03);
-        ctx.lineTo(s * h * 0.08, shoulder + h * 0.02);
+        ctx.moveTo(s * sw * 0.36, shoulder - h * 0.004);
+        ctx.lineTo(s * h * 0.03, chest + h * 0.02);
+        ctx.lineTo(s * sw * 0.42, chest + h * 0.012);
+        ctx.lineTo(s * sw * 0.62, shoulder + h * 0.014);
         ctx.closePath();
-        ctx.fillStyle = shade(coat, 0.2);
+        ctx.fillStyle = shade(coat, 0.18);
         ctx.fill();
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = lw * 0.8;
+        ctx.stroke();
       });
-      ctx.fillStyle = 'rgba(30,20,12,0.4)';
-      ctx.beginPath();
-      ctx.arc(0, chest + h * 0.06, h * 0.007, 0, Math.PI * 2);
-      ctx.fill();
+    }
+
+    // ворот
+    if (!coat) {
+      ctx.strokeStyle = shade(shirt, -0.3);
+      ctx.lineWidth = Math.max(2, h * 0.014);
+      if (p.collar === 'v') {
+        ctx.beginPath();
+        ctx.moveTo(-h * 0.046, shoulder - h * 0.006);
+        ctx.lineTo(0, shoulder + h * 0.058);
+        ctx.lineTo(h * 0.046, shoulder - h * 0.006);
+        ctx.stroke();
+      } else if (p.collar === 'polo') {
+        ctx.beginPath();
+        ctx.moveTo(-h * 0.05, shoulder - h * 0.008);
+        ctx.lineTo(-h * 0.014, shoulder + h * 0.03);
+        ctx.lineTo(0, shoulder + h * 0.008);
+        ctx.lineTo(h * 0.014, shoulder + h * 0.03);
+        ctx.lineTo(h * 0.05, shoulder - h * 0.008);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.ellipse(0, shoulder + h * 0.001, h * 0.054, h * 0.026, 0, 0.12, Math.PI - 0.12);
+        ctx.stroke();
+      }
+      // пуговицы
+      ctx.fillStyle = 'rgba(255,248,232,0.4)';
+      for (var bi = 0; bi < 2; bi++) {
+        ctx.beginPath();
+        ctx.arc(0, chest + h * 0.04 + bi * h * 0.045, Math.max(1.4, h * 0.006), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // ремень
+    if (!coat) {
+      ctx.fillStyle = 'rgba(44,29,18,0.9)';
+      ctx.fillRect(-hw * 0.98, hip - h * 0.012, hw * 1.96, h * 0.018);
     }
 
     // шарф
     if (p.scarf) {
       ctx.beginPath();
-      ctx.ellipse(0, shoulder + h * 0.002, h * 0.075, h * 0.032, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, shoulder + h * 0.008, h * 0.082, h * 0.038, 0, 0, Math.PI * 2);
       ctx.fillStyle = p.scarf;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(30,18,10,0.28)';
-      ctx.lineWidth = Math.max(1, lw * 0.8);
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.85;
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(h * 0.03, shoulder + h * 0.02);
-      ctx.quadraticCurveTo(h * 0.06, chest + h * 0.03, h * 0.045, chest + h * 0.09);
-      ctx.lineTo(h * 0.012, chest + h * 0.085);
-      ctx.quadraticCurveTo(h * 0.02, chest + h * 0.02, -h * 0.005, shoulder + h * 0.02);
+      ctx.moveTo(h * 0.034, shoulder + h * 0.03);
+      ctx.quadraticCurveTo(h * 0.07, chest + h * 0.04, h * 0.05, chest + h * 0.1);
+      ctx.lineTo(h * 0.012, chest + h * 0.095);
+      ctx.quadraticCurveTo(h * 0.022, chest + h * 0.02, -h * 0.006, shoulder + h * 0.03);
       ctx.closePath();
-      ctx.fillStyle = shade(p.scarf, -0.08);
+      ctx.fillStyle = shade(p.scarf, -0.1);
       ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw * 0.75;
+      ctx.stroke();
     }
+
+    drawArms();
+
+    // шея
+    rr(ctx, -h * 0.042, shoulder - h * 0.05, h * 0.084, h * 0.09, h * 0.024);
+    ctx.fillStyle = skinShade;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(50,32,22,0.5)';
+    ctx.lineWidth = lw * 0.8;
+    ctx.stroke();
 
     // уши
     [-1, 1].forEach(function (s) {
       ctx.beginPath();
-      ctx.ellipse(s * headR * 0.93, headCY + headR * 0.09, headR * 0.15, headR * 0.2, s * 0.14, 0, Math.PI * 2);
+      ctx.ellipse(s * headR * 0.97, headCY + headR * 0.1, headR * 0.19, headR * 0.24, s * 0.1, 0, Math.PI * 2);
       ctx.fillStyle = skin;
       ctx.fill();
-      ctx.strokeStyle = outline;
+      ctx.strokeStyle = INK;
       ctx.lineWidth = lw * 0.85;
       ctx.stroke();
       ctx.beginPath();
-      ctx.ellipse(s * headR * 0.95, headCY + headR * 0.1, headR * 0.07, headR * 0.11, s * 0.14, 0, Math.PI * 2);
-      ctx.fillStyle = shade(skin, -0.14);
+      ctx.ellipse(s * headR * 0.99, headCY + headR * 0.11, headR * 0.1, headR * 0.13, s * 0.1, 0, Math.PI * 2);
+      ctx.fillStyle = skinShade;
       ctx.fill();
     });
 
     // голова
-    shape(function () { headPath(ctx, headCY, headR); }, skin);
-    // объём и тень
-    ctx.save();
     ctx.beginPath();
     headPath(ctx, headCY, headR);
+    ctx.fillStyle = skin;
+    ctx.fill();
+    ctx.save();
     ctx.clip();
-    var hg = ctx.createLinearGradient(-headR, headCY - headR, headR, headCY + headR);
-    hg.addColorStop(0, 'rgba(255,255,255,0.16)');
-    hg.addColorStop(0.5, 'rgba(255,255,255,0)');
-    hg.addColorStop(1, 'rgba(96,58,38,0.2)');
-    ctx.fillStyle = hg;
-    ctx.fillRect(-headR * 1.2, headCY - headR * 1.2, headR * 2.4, headR * 2.4);
-    // тень под подбородком
-    ctx.fillStyle = 'rgba(90,55,35,0.12)';
+    // мягкая тень только под подбородком: лицо остаётся плоским, без шва на щеке
+    ctx.fillStyle = 'rgba(96,54,32,0.1)';
     ctx.beginPath();
-    ctx.ellipse(0, headCY + headR * 0.92, headR * 0.5, headR * 0.16, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, headCY + headR * 0.95, headR * 0.62, headR * 0.2, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+    ctx.beginPath();
+    headPath(ctx, headCY, headR);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = lw;
+    ctx.stroke();
 
     drawFace(ctx, p, 0, headCY, headR, lw);
-    hairFront(ctx, p, headCY, headR);
-    drawHat(ctx, p, headCY, headR);
-    drawGlasses(ctx, p, headCY, headR);
+    hairFront(ctx, p, headCY, headR, lw);
+    drawHat(ctx, p, headCY, headR, lw);
+    drawGlasses(ctx, p, headCY, headR, lw);
 
     // сумка через плечо
     if (p.bag === 'bag' && !opts.noBag) {
       ctx.strokeStyle = '#6a4a32';
-      ctx.lineWidth = Math.max(1.6, h * 0.009);
+      ctx.lineWidth = Math.max(2, h * 0.011);
       ctx.beginPath();
-      ctx.moveTo(-h * 0.09, shoulder + h * 0.012);
-      ctx.lineTo(h * 0.085, hip - h * 0.005);
+      ctx.moveTo(-h * 0.085, shoulder + h * 0.014);
+      ctx.lineTo(h * 0.088, hip - h * 0.008);
       ctx.stroke();
       ctx.save();
-      ctx.translate(h * 0.105, hip - h * 0.01);
-      fillRR(ctx, -h * 0.048, 0, h * 0.096, h * 0.115, h * 0.012, '#d8b48a');
-      ctx.strokeStyle = 'rgba(80,52,32,0.6)';
-      ctx.lineWidth = lw * 0.9;
-      rr(ctx, -h * 0.048, 0, h * 0.096, h * 0.115, h * 0.012);
+      ctx.translate(h * 0.105, hip - h * 0.015);
+      rr(ctx, -h * 0.052, 0, h * 0.104, h * 0.12, h * 0.018);
+      ctx.fillStyle = '#d8b48a';
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = lw;
       ctx.stroke();
-      ctx.fillStyle = 'rgba(120,80,50,0.5)';
-      ctx.fillRect(-h * 0.048, h * 0.035, h * 0.096, h * 0.009);
+      ctx.fillStyle = 'rgba(110,72,44,0.5)';
+      ctx.fillRect(-h * 0.052, h * 0.038, h * 0.104, h * 0.012);
       ctx.restore();
     }
 
@@ -1266,6 +1578,472 @@
     ctx.restore();
   }
   art.drawParcel = drawParcel;
+
+  /* ---------------- товары: узнаваемые спрайты по названию заказа ---------------- */
+  /* Покупатель должен получить не безликую коробку, а тот товар, который
+     действительно лежит в заказе. Категорий немного, но по ним закрывается
+     весь каталог и товары пасхалок. */
+  function itemKindOf(name, kind) {
+    var n = String(name || '').toLowerCase();
+    if (/кроссов|ботин|сапог|туфл|кед/.test(n)) return 'shoe';
+    if (/куртк|плащ|пальто|ветровк|пиджак/.test(n)) return 'coat';
+    if (/платье|юбк|сарафан/.test(n)) return 'dress';
+    if (/джинс|брюк|штан|лосин/.test(n)) return 'pants';
+    if (/футболк|свитер|кофт|рубашк|толстовк/.test(n)) return 'shirt';
+    if (/шапк|кепк|шляп|панам/.test(n)) return 'hat';
+    if (/рюкзак/.test(n)) return 'backpack';
+    if (/сумк|чемодан|портфель/.test(n)) return 'bag';
+    if (/наушник|колонк|гарнитур/.test(n)) return 'headphones';
+    if (/чайник/.test(n)) return 'kettle';
+    if (/термос/.test(n)) return 'thermos';
+    if (/кружк|чашк|стакан/.test(n)) return 'mug';
+    if (/лампа|светильник|ночник/.test(n)) return 'lamp';
+    if (/плед|одеял|подушк|носк|покрывал/.test(n)) return 'blanket';
+    if (/игрушк|мишк|плюш|кукл/.test(n)) return 'toy';
+    if (/чехол/.test(n)) return 'case';
+    if (/коврик|ковер|ковёр/.test(n)) return 'mat';
+    if (/пылесос/.test(n)) return 'vacuum';
+    if (/кофемашин|кофевар|кофе/.test(n)) return 'coffee';
+    if (/стол|стул|полк|шкаф|табурет|кресл/.test(n)) return 'chair';
+    if (/книг|комикс|журнал/.test(n)) return 'book';
+    if (/корм|витамин|лекарств|гриб|посуда|химическ/.test(n)) return 'jar';
+    if (/гитар|скрипк|укулеле/.test(n)) return 'guitar';
+    if (/самокат|велосипед|ролик/.test(n)) return 'scooter';
+    if (/клавиатур/.test(n)) return 'keyboard';
+    if (/монитор|телевизор|экран/.test(n)) return 'monitor';
+    if (/меч|клинок|кинжал|сабл/.test(n)) return 'sword';
+    if (/шлем|каск/.test(n)) return 'helmet';
+    if (/лупа/.test(n)) return 'magnifier';
+    if (/трость|посох/.test(n)) return 'cane';
+    if (/часы|часов/.test(n)) return 'watch';
+    if (/фейерверк|петард/.test(n)) return 'rocket';
+    if (kind === 'clothes') return 'shirt';
+    return 'box';
+  }
+  art.itemKindOf = itemKindOf;
+
+  function drawItemSprite(ctx, key) {
+    switch (key) {
+      case 'shoe': {
+        ctx.fillStyle = '#3d4249';
+        fillRR(ctx, 8, 64, 84, 12, 6);
+        ctx.fillStyle = '#f4f1ea';
+        ctx.beginPath();
+        ctx.moveTo(10, 66); ctx.lineTo(12, 42);
+        ctx.quadraticCurveTo(20, 30, 36, 32); ctx.lineTo(50, 44);
+        ctx.quadraticCurveTo(70, 50, 90, 60); ctx.lineTo(90, 66); ctx.closePath(); ctx.fill();
+        // носок
+        ctx.fillStyle = '#d9d5cc';
+        ctx.beginPath();
+        ctx.moveTo(64, 49); ctx.quadraticCurveTo(80, 55, 90, 60); ctx.lineTo(90, 66); ctx.lineTo(64, 66);
+        ctx.closePath(); ctx.fill();
+        // манжета
+        ctx.fillStyle = '#d9d5cc';
+        ctx.beginPath(); ctx.ellipse(24, 44, 10, 7, -0.25, 0, Math.PI * 2); ctx.fill();
+        // контур
+        ctx.strokeStyle = '#8a8278'; ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(10, 66); ctx.lineTo(12, 42);
+        ctx.quadraticCurveTo(20, 30, 36, 32); ctx.lineTo(50, 44);
+        ctx.quadraticCurveTo(70, 50, 90, 60);
+        ctx.stroke();
+        // шнуровка
+        ctx.lineWidth = 2.4; ctx.lineCap = 'round';
+        [[34, 42, 46, 39], [38, 47, 50, 44], [42, 52, 54, 49]].forEach(function (p) {
+          ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[2], p[3]); ctx.stroke();
+        });
+        // фирменная полоса
+        ctx.strokeStyle = '#f2994a'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(58, 52); ctx.quadraticCurveTo(74, 58, 87, 62); ctx.stroke();
+        break;
+      }
+      case 'coat': {
+        ctx.strokeStyle = '#6c757a'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(50, 14, 7, Math.PI * 0.9, Math.PI * 2.1); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(50, 20); ctx.lineTo(50, 28); ctx.stroke();
+        ctx.fillStyle = '#6f8fb5';
+        ctx.beginPath();
+        ctx.moveTo(38, 24); ctx.lineTo(18, 32); ctx.lineTo(10, 64); ctx.lineTo(25, 68);
+        ctx.lineTo(30, 46); ctx.lineTo(30, 94); ctx.lineTo(70, 94); ctx.lineTo(70, 46);
+        ctx.lineTo(75, 68); ctx.lineTo(90, 64); ctx.lineTo(82, 32); ctx.lineTo(62, 24);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#5b7899';
+        ctx.beginPath(); ctx.moveTo(38, 24); ctx.lineTo(50, 46); ctx.lineTo(44, 56); ctx.lineTo(34, 40); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(62, 24); ctx.lineTo(50, 46); ctx.lineTo(56, 56); ctx.lineTo(66, 40); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#d8c9a8'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(50, 46); ctx.lineTo(50, 92); ctx.stroke();
+        break;
+      }
+      case 'dress': {
+        ctx.fillStyle = '#c46b8e';
+        ctx.beginPath();
+        ctx.moveTo(36, 20); ctx.lineTo(64, 20); ctx.lineTo(60, 44); ctx.lineTo(74, 90);
+        ctx.lineTo(26, 90); ctx.lineTo(40, 44); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#a9557a';
+        ctx.beginPath(); ctx.moveTo(40, 44); ctx.lineTo(60, 44); ctx.lineTo(56, 58); ctx.lineTo(44, 58); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#c46b8e'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(38, 20); ctx.lineTo(34, 10); ctx.moveTo(62, 20); ctx.lineTo(66, 10); ctx.stroke();
+        break;
+      }
+      case 'pants': {
+        ctx.fillStyle = '#41556b';
+        ctx.beginPath();
+        ctx.moveTo(28, 14); ctx.lineTo(72, 14); ctx.lineTo(70, 86); ctx.lineTo(56, 86);
+        ctx.lineTo(50, 46); ctx.lineTo(44, 86); ctx.lineTo(30, 86); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(0,0,0,0.16)';
+        ctx.fillRect(48, 14, 4, 30);
+        ctx.fillStyle = '#c9a26a';
+        ctx.fillRect(28, 14, 44, 7);
+        break;
+      }
+      case 'shirt': {
+        ctx.fillStyle = '#5aa877';
+        ctx.beginPath();
+        ctx.moveTo(36, 18); ctx.lineTo(20, 24); ctx.lineTo(12, 44); ctx.lineTo(24, 50);
+        ctx.lineTo(28, 36); ctx.lineTo(28, 90); ctx.lineTo(72, 90); ctx.lineTo(72, 36);
+        ctx.lineTo(76, 50); ctx.lineTo(88, 44); ctx.lineTo(80, 24); ctx.lineTo(64, 18);
+        ctx.quadraticCurveTo(50, 32, 36, 18); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.16)';
+        ctx.beginPath(); ctx.moveTo(36, 18); ctx.quadraticCurveTo(50, 32, 64, 18); ctx.lineTo(58, 26); ctx.quadraticCurveTo(50, 34, 42, 26); ctx.closePath(); ctx.fill();
+        break;
+      }
+      case 'hat': {
+        ctx.fillStyle = '#e7a05a';
+        ctx.beginPath(); ctx.arc(50, 52, 26, Math.PI, 0); ctx.lineTo(76, 66); ctx.lineTo(24, 66); ctx.closePath(); ctx.fill();
+        fillRR(ctx, 20, 62, 60, 10, 5, '#c9853f');
+        ctx.fillStyle = '#f5ead4';
+        ctx.beginPath(); ctx.arc(50, 22, 9, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'bag': {
+        ctx.strokeStyle = '#7a4f28'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.arc(50, 40, 18, Math.PI, 0); ctx.stroke();
+        ctx.fillStyle = '#a9713f';
+        fillRR(ctx, 20, 40, 60, 44, 10);
+        fillRR(ctx, 20, 40, 60, 10, 5, '#8a5a30');
+        ctx.fillStyle = '#ffd479';
+        fillRR(ctx, 44, 54, 12, 10, 3);
+        break;
+      }
+      case 'backpack': {
+        ctx.fillStyle = '#4a6a8e';
+        fillRR(ctx, 24, 26, 52, 64, 12);
+        ctx.fillStyle = '#3a5474';
+        fillRR(ctx, 30, 34, 40, 22, 8);
+        fillRR(ctx, 38, 62, 24, 18, 5, '#5f80a5');
+        ctx.strokeStyle = '#2f4460'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(32, 30); ctx.lineTo(26, 66); ctx.moveTo(68, 30); ctx.lineTo(74, 66); ctx.stroke();
+        break;
+      }
+      case 'headphones': {
+        ctx.strokeStyle = '#3c444c'; ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.arc(50, 46, 27, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+        ctx.fillStyle = '#2f363d';
+        fillRR(ctx, 14, 42, 18, 30, 8);
+        fillRR(ctx, 68, 42, 18, 30, 8);
+        ctx.fillStyle = '#f2994a';
+        fillRR(ctx, 19, 48, 8, 18, 4);
+        fillRR(ctx, 73, 48, 8, 18, 4);
+        break;
+      }
+      case 'kettle': {
+        ctx.fillStyle = '#b9c3c9';
+        fillRR(ctx, 28, 40, 44, 44, 12);
+        ctx.fillStyle = '#8f9aa1';
+        fillRR(ctx, 24, 32, 52, 12, 6);
+        ctx.strokeStyle = '#8f9aa1'; ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.moveTo(72, 50); ctx.lineTo(86, 38); ctx.stroke();
+        ctx.beginPath(); ctx.arc(30, 62, 13, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+        ctx.fillStyle = '#f2994a';
+        ctx.beginPath(); ctx.arc(50, 72, 5, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'thermos': {
+        ctx.fillStyle = '#3f6f8a';
+        fillRR(ctx, 36, 24, 28, 62, 10);
+        ctx.fillStyle = '#2c4a5e';
+        fillRR(ctx, 38, 14, 24, 14, 6);
+        ctx.fillStyle = '#9fd6c6';
+        fillRR(ctx, 36, 46, 28, 12, 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        fillRR(ctx, 40, 30, 6, 48, 3);
+        break;
+      }
+      case 'mug': {
+        ctx.fillStyle = '#f2e4d2';
+        fillRR(ctx, 28, 34, 38, 46, 8);
+        ctx.strokeStyle = '#f2e4d2'; ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.arc(68, 56, 14, Math.PI * 1.5, Math.PI * 0.5); ctx.stroke();
+        ctx.fillStyle = '#8a5a30';
+        fillRR(ctx, 30, 34, 34, 8, 4);
+        ctx.fillStyle = '#f2994a';
+        ctx.beginPath(); ctx.arc(47, 60, 8, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'lamp': {
+        ctx.fillStyle = '#6c757a';
+        fillRR(ctx, 34, 84, 32, 8, 4);
+        ctx.fillRect(47, 46, 6, 40);
+        ctx.fillStyle = '#ffd479';
+        ctx.beginPath(); ctx.moveTo(50, 12); ctx.lineTo(80, 50); ctx.lineTo(20, 50); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(255,220,140,0.35)';
+        ctx.beginPath(); ctx.arc(50, 54, 26, 0, Math.PI); ctx.fill();
+        break;
+      }
+      case 'blanket': {
+        ctx.fillStyle = '#8d6fa8';
+        fillRR(ctx, 16, 48, 68, 38, 8);
+        ctx.fillStyle = '#a785c4';
+        fillRR(ctx, 20, 40, 60, 16, 6);
+        ctx.fillStyle = '#f2e4d2';
+        ctx.fillRect(16, 62, 68, 5);
+        ctx.fillRect(16, 74, 68, 5);
+        break;
+      }
+      case 'toy': {
+        ctx.fillStyle = '#b98049';
+        ctx.beginPath(); ctx.arc(34, 30, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(66, 30, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#c98f5f';
+        ctx.beginPath(); ctx.arc(50, 46, 24, 0, Math.PI * 2); ctx.fill();
+        fillRR(ctx, 30, 60, 40, 28, 12);
+        ctx.fillStyle = '#3a2a21';
+        ctx.beginPath(); ctx.arc(42, 44, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(58, 44, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#3a2a21'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(50, 52, 4, 0, Math.PI); ctx.stroke();
+        break;
+      }
+      case 'case': {
+        ctx.fillStyle = '#3c444c';
+        fillRR(ctx, 30, 12, 40, 76, 12);
+        ctx.fillStyle = '#2b3137';
+        ctx.beginPath(); ctx.arc(42, 28, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(58, 28, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#7fb4c2';
+        ctx.beginPath(); ctx.arc(42, 28, 6, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'mat': {
+        ctx.fillStyle = '#5f8f74';
+        fillRR(ctx, 16, 38, 68, 24, 12);
+        ctx.strokeStyle = '#3f6b54'; ctx.lineWidth = 3;
+        for (var mi = 0; mi < 3; mi++) {
+          ctx.beginPath(); ctx.arc(76, 50, 6 + mi * 4, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.fillStyle = '#f2994a';
+        ctx.fillRect(24, 38, 6, 24);
+        break;
+      }
+      case 'vacuum': {
+        ctx.fillStyle = '#8a5a34';
+        fillRR(ctx, 20, 46, 54, 34, 14);
+        ctx.fillStyle = '#c9a26a';
+        fillRR(ctx, 26, 40, 42, 12, 6);
+        ctx.strokeStyle = '#6c757a'; ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.moveTo(74, 52); ctx.quadraticCurveTo(92, 62, 80, 84); ctx.stroke();
+        fillRR(ctx, 68, 82, 26, 8, 4, '#6c757a');
+        ctx.fillStyle = '#3c444c';
+        ctx.beginPath(); ctx.arc(32, 84, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(62, 84, 8, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'coffee': {
+        ctx.fillStyle = '#3c444c';
+        fillRR(ctx, 26, 18, 48, 62, 8);
+        ctx.fillStyle = '#7fb4c2';
+        fillRR(ctx, 32, 26, 36, 18, 4);
+        ctx.fillStyle = '#f2e4d2';
+        fillRR(ctx, 36, 52, 28, 20, 4);
+        ctx.fillStyle = '#8a5a30';
+        ctx.beginPath(); ctx.arc(50, 62, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#e4572e';
+        ctx.beginPath(); ctx.arc(56, 34, 4, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'chair': {
+        ctx.fillStyle = '#a9713f';
+        fillRR(ctx, 30, 10, 40, 34, 8);
+        fillRR(ctx, 20, 48, 60, 14, 6);
+        ctx.fillStyle = '#7d4f2a';
+        ctx.fillRect(24, 62, 7, 26);
+        ctx.fillRect(69, 62, 7, 26);
+        ctx.fillRect(48, 62, 7, 26);
+        break;
+      }
+      case 'book': {
+        ctx.fillStyle = '#e4572e';
+        fillRR(ctx, 18, 16, 64, 70, 6);
+        ctx.fillStyle = '#f2e4d2';
+        fillRR(ctx, 30, 16, 52, 70, 4);
+        ctx.fillStyle = '#c9a26a';
+        ctx.fillRect(30, 30, 52, 3);
+        ctx.fillRect(30, 40, 52, 3);
+        ctx.fillStyle = '#3a2a21';
+        ctx.fillRect(24, 16, 6, 70);
+        break;
+      }
+      case 'jar': {
+        ctx.fillStyle = '#cfe1d8';
+        fillRR(ctx, 30, 24, 40, 58, 10);
+        ctx.fillStyle = '#8a5a30';
+        fillRR(ctx, 28, 16, 44, 12, 5);
+        ctx.fillStyle = '#f5ead4';
+        fillRR(ctx, 30, 46, 40, 20, 2);
+        ctx.fillStyle = '#5aa877';
+        ctx.beginPath(); ctx.arc(50, 56, 6, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'guitar': {
+        ctx.fillStyle = '#c98f5f';
+        ctx.beginPath(); ctx.arc(44, 66, 24, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(52, 44, 18, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#8a5a30';
+        fillRR(ctx, 50, 6, 8, 40, 3);
+        ctx.beginPath(); ctx.arc(44, 66, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#3a2a21';
+        ctx.beginPath(); ctx.arc(44, 66, 3, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'scooter': {
+        ctx.fillStyle = '#3c444c';
+        ctx.beginPath(); ctx.arc(24, 80, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(76, 80, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#e4572e';
+        fillRR(ctx, 20, 64, 56, 10, 5);
+        ctx.strokeStyle = '#9aa3a8'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(66, 64); ctx.lineTo(72, 24); ctx.stroke();
+        fillRR(ctx, 62, 18, 28, 8, 4, '#3c444c');
+        break;
+      }
+      case 'keyboard': {
+        ctx.fillStyle = '#3c444c';
+        fillRR(ctx, 10, 34, 80, 36, 6);
+        ctx.fillStyle = '#d8dde0';
+        for (var kr = 0; kr < 3; kr++) {
+          for (var kc = 0; kc < 8; kc++) ctx.fillRect(16 + kc * 9, 40 + kr * 8, 6, 5);
+        }
+        ctx.fillRect(24, 62, 52, 4);
+        break;
+      }
+      case 'monitor': {
+        ctx.fillStyle = '#2f363d';
+        fillRR(ctx, 10, 16, 80, 52, 6);
+        ctx.fillStyle = '#7fb4c2';
+        fillRR(ctx, 16, 22, 68, 40, 3);
+        ctx.fillStyle = '#2f363d';
+        ctx.fillRect(46, 68, 8, 14);
+        fillRR(ctx, 30, 80, 40, 6, 3);
+        break;
+      }
+      case 'sword': {
+        ctx.fillStyle = '#d8dde0';
+        ctx.beginPath(); ctx.moveTo(78, 8); ctx.lineTo(86, 16); ctx.lineTo(40, 62); ctx.lineTo(32, 54); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#9aa3a8'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(36, 58); ctx.lineTo(80, 14); ctx.stroke();
+        ctx.fillStyle = '#c9a227';
+        fillRR(ctx, 24, 54, 24, 8, 3);
+        ctx.save(); ctx.translate(26, 60); ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = '#8a5a34'; fillRR(ctx, 0, 0, 7, 24, 3);
+        ctx.restore();
+        break;
+      }
+      case 'helmet': {
+        ctx.fillStyle = '#2f363d';
+        ctx.beginPath(); ctx.arc(50, 52, 30, Math.PI, 0); ctx.lineTo(80, 64); ctx.lineTo(20, 64); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#e4572e';
+        ctx.beginPath(); ctx.arc(50, 52, 30, Math.PI * 1.15, Math.PI * 1.85); ctx.lineTo(50, 52); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#7fb4c2';
+        fillRR(ctx, 30, 56, 40, 10, 4);
+        break;
+      }
+      case 'magnifier': {
+        ctx.strokeStyle = '#8a5a34'; ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.moveTo(58, 58); ctx.lineTo(82, 84); ctx.stroke();
+        ctx.strokeStyle = '#c9a26a'; ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.arc(42, 42, 24, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = 'rgba(160,220,235,0.4)';
+        ctx.beginPath(); ctx.arc(42, 42, 22, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'cane': {
+        ctx.strokeStyle = '#6b4526'; ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.moveTo(42, 90); ctx.lineTo(42, 30); ctx.quadraticCurveTo(42, 12, 60, 14); ctx.stroke();
+        ctx.fillStyle = '#c9a227';
+        ctx.beginPath(); ctx.arc(60, 14, 7, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+      case 'watch': {
+        ctx.fillStyle = '#3c444c';
+        fillRR(ctx, 38, 10, 24, 24, 6);
+        fillRR(ctx, 38, 66, 24, 24, 6);
+        ctx.fillStyle = '#c9a227';
+        ctx.beginPath(); ctx.arc(50, 50, 22, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#f5ead4';
+        ctx.beginPath(); ctx.arc(50, 50, 16, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#3a2a21'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(50, 50); ctx.lineTo(50, 40); ctx.moveTo(50, 50); ctx.lineTo(58, 54); ctx.stroke();
+        break;
+      }
+      case 'rocket': {
+        ctx.fillStyle = '#e4572e';
+        fillRR(ctx, 42, 12, 16, 52, 6);
+        ctx.fillStyle = '#ffd479';
+        ctx.beginPath(); ctx.moveTo(42, 64); ctx.lineTo(50, 88); ctx.lineTo(58, 64); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#3c444c';
+        fillRR(ctx, 34, 78, 32, 6, 3);
+        break;
+      }
+      default: {
+        // обобщённая коробка с логотипом — для редких товаров
+        ctx.fillStyle = '#c9a26a';
+        fillRR(ctx, 16, 26, 68, 58, 6);
+        ctx.fillStyle = '#e6d3a8';
+        ctx.fillRect(44, 26, 12, 58);
+        ctx.fillStyle = '#fffdf6';
+        fillRR(ctx, 24, 56, 32, 20, 3);
+        ctx.fillStyle = '#8a5a30';
+        ctx.fillRect(28, 62, 24, 3);
+        ctx.fillRect(28, 68, 16, 3);
+        ctx.fillStyle = '#f2994a';
+        ctx.beginPath(); ctx.arc(66, 44, 7, 0, Math.PI * 2); ctx.fill();
+        break;
+      }
+    }
+  }
+
+  function drawCatalogItem(ctx, name, kind, x, y, w, h, opts) {
+    opts = opts || {};
+    var key = opts.key || itemKindOf(name, kind);
+    var s = Math.min(w, h) / 100;
+    var cx = x + w / 2, cy = y + h / 2;
+    ctx.save();
+    if (opts.alpha != null) ctx.globalAlpha *= opts.alpha;
+    if (opts.rot) {
+      ctx.translate(cx, cy);
+      ctx.rotate(opts.rot);
+      ctx.translate(-cx, -cy);
+    }
+    if (opts.shadow !== false) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(40,24,12,0.4)';
+      ctx.shadowBlur = Math.max(6, w * 0.14);
+      ctx.shadowOffsetY = Math.max(2, h * 0.05);
+      ctx.fillStyle = 'rgba(0,0,0,0.01)';
+      fillRR(ctx, x + w * 0.16, y + h * 0.16, w * 0.68, h * 0.68, 8);
+      ctx.restore();
+    }
+    ctx.translate(cx, cy);
+    ctx.scale(s, s);
+    ctx.translate(-50, -50);
+    drawItemSprite(ctx, key);
+    ctx.restore();
+    if (opts.label) {
+      txt(ctx, opts.label, cx, y + h + 18, 13, 'rgba(255,240,220,0.9)', 700, 'center');
+    }
+  }
+  art.drawCatalogItem = drawCatalogItem;
+  art.itemSpriteKey = function (name, kind) { return itemKindOf(name, kind); };
 
   /* ---------------- раскладки ---------------- */
   art.LAYOUT = {
@@ -1586,17 +2364,22 @@
     // очередь и уходящие покупатели (дальний план, за стойкой)
     var crowd = env.crowd || [];
     crowd.slice().sort(function (a, b) { return a.h - b.h; }).forEach(function (p) {
-      drawPerson(ctx, p.person, p.x, p.gy, p.h, {
+      // lift приподнимает фигуру над полом: у стойки стопы всё равно скрыты прилавком
+      var gy = p.gy - p.h * (p.lift || 0);
+      drawPerson(ctx, p.person, p.x, gy, p.h, {
         walk: p.walking ? t * 9.5 : 0,
         sway: p.walking ? 0 : t * 1.4,
         handsUp: p.person.expr === 'angry',
         alpha: p.alpha == null ? 1 : p.alpha
       });
-      if (p.mood) drawMoodBadge(ctx, p.x + p.h * 0.165, p.gy - p.h * 0.83, p.h * 0.048, p.person, p.mood, t);
+      // привязки считаем по реальной макушке: у мультяшных голов она выше
+      var pm = personMetrics(p.person, p.h);
+      var headTopY = gy - pm.top;
+      if (p.mood) drawMoodBadge(ctx, p.x + pm.headR * 1.3, headTopY + pm.headR * 0.42, p.h * 0.045, p.person, p.mood, t);
       if (p.person.bubble && (p.bubbleAlpha == null || p.bubbleAlpha > 0.02)) {
         ctx.save();
         ctx.globalAlpha = p.bubbleAlpha == null ? 1 : Math.min(1, p.bubbleAlpha);
-        bubble(ctx, p.person.bubble, Math.max(210, Math.min(1070, p.x)), p.gy - p.h * 0.83 - 62, { size: p.small ? 16 : 21, maxW: p.small ? 300 : 430 });
+        bubble(ctx, p.person.bubble, Math.max(210, Math.min(1070, p.x)), headTopY - pm.headR * 0.1 + 10, { size: p.small ? 16 : 21, maxW: p.small ? 300 : 430 });
         ctx.restore();
       }
       if (p.leaving) {
@@ -1700,6 +2483,9 @@
     softShadow(ctx, 920, 660, 24, 7, 0.26);
     drawMouse(ctx, 902, 616);
 
+    // стаканчик с ручками — до посылки, чтобы не перекрывать её
+    drawPenCup(ctx, 412, 508, 40);
+
     // сканер лежит слева, на краю стола — не мешает. Взяли в руку — со стола исчезает.
     if (!env.scannerHeld) {
       softShadow(ctx, 594, 652, 64, 11, 0.24);
@@ -1708,9 +2494,37 @@
     // посылка, которую положили на стол перед сканированием
     if (env.parcel) {
       var pp = art.LAYOUT.counter.parcelOnTable;
+      var place = env.parcel.place == null ? 1 : U.clamp(env.parcel.place, 0, 1);
+      var rot = -0.03;
+      if (place < 1) {
+        // коробку «дотащили» из рук: плавно опускаем её на стол
+        var ease = 1 - Math.pow(1 - place, 3);
+        var fromP = { x: 548, y: 426, w: 184, h: 150 };
+        pp = {
+          x: fromP.x + (pp.x - fromP.x) * ease,
+          y: fromP.y + (pp.y - fromP.y) * ease,
+          w: fromP.w + (pp.w - fromP.w) * ease,
+          h: fromP.h + (pp.h - fromP.h) * ease
+        };
+        rot = -0.03 + (1 - ease) * 0.06;
+      }
       softShadow(ctx, pp.x + pp.w / 2, pp.y + pp.h - 2, pp.w * 0.52, 9, 0.24);
-      drawParcel(ctx, pp.x, pp.y, pp.w, pp.h, { seed: 4, rot: -0.03 });
-      if (env.parcel.scanned) {
+      drawParcel(ctx, pp.x, pp.y, pp.w, pp.h, { seed: 1, color: '#c9a26a', rot: rot, code: env.parcel.code });
+      if (place >= 1 && env.parcel.unpacked) {
+        // вскрытая коробка: тёмное нутро и отогнутые клапаны
+        ctx.save();
+        ctx.fillStyle = 'rgba(40,26,15,0.9)';
+        fillRR(ctx, pp.x + 9, pp.y + 7, pp.w - 18, pp.h * 0.3, 3);
+        ctx.fillStyle = '#dcb87f';
+        ctx.beginPath();
+        ctx.moveTo(pp.x + 6, pp.y + 8); ctx.lineTo(pp.x + 10, pp.y - 6);
+        ctx.lineTo(pp.x + 22, pp.y - 4); ctx.lineTo(pp.x + 20, pp.y + 4); ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(pp.x + pp.w - 6, pp.y + 8); ctx.lineTo(pp.x + pp.w - 10, pp.y - 6);
+        ctx.lineTo(pp.x + pp.w - 24, pp.y - 4); ctx.lineTo(pp.x + pp.w - 22, pp.y + 4); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+      if (place >= 1 && env.parcel.scanned && !env.parcel.unpacked) {
         ctx.save();
         ctx.shadowColor = 'rgba(90,200,140,0.8)';
         ctx.shadowBlur = 12;
@@ -1731,7 +2545,6 @@
     // звоночек переехал ближе к центру, между сканером и ноутбуком
     softShadow(ctx, 766, 633, 28, 7, 0.24);
     drawBell(ctx, 740, 604, t, env.bellRinging);
-    drawPenCup(ctx, 412, 508, 40);
 
     // уличный кот, если его оставили на ПВЗ — сидит на подушке и заметно крупный
     if (env.cat) {
@@ -1742,6 +2555,32 @@
 
     // касса на время вечерней сверки
     if (env.showCash) drawCashRegister(ctx, art.LAYOUT.counter.cash, env.cashDone);
+
+    /* --- то, что игрок держит в руках: рисуем поверх всего стола --- */
+    // коробка в руках: несут со склада к столу
+    if (env.carry && !env.parcel) {
+      drawCarryBox(ctx, env.carry, t);
+    }
+    // товар уже достали из коробки — держим его в руках перед покупателем
+    if (env.heldProduct) {
+      var hp = { x: 846, y: 468, w: 194, h: 194 };
+      softShadow(ctx, hp.x + hp.w / 2, hp.y + hp.h - 4, 72, 13, 0.3);
+      drawHandsCradle(ctx, hp.x + 6, hp.y + hp.h - 8, hp.w - 12, t);
+      drawCatalogItem(ctx, env.heldProduct.item, env.heldProduct.kind, hp.x, hp.y, hp.w, hp.h,
+        { rot: Math.sin(t * 1.2) * 0.03 });
+    }
+    // передача товара покупателю: спрайт летит из рук к клиенту
+    if (env.handoff) {
+      var ht = U.clamp((env.handoff.t || 0) / 0.95, 0, 1);
+      var easeH = 1 - Math.pow(1 - ht, 2.2);
+      var hx2 = 930 + (630 - 930) * easeH;
+      var hy2 = 590 + (404 - 590) * easeH - Math.sin(ht * Math.PI) * 90;
+      var hsz = 160 * (1 - 0.35 * ht);
+      ctx.save();
+      ctx.globalAlpha = ht > 0.78 ? Math.max(0, 1 - (ht - 0.78) / 0.22) : 1;
+      drawCatalogItem(ctx, env.handoff.item, env.handoff.kind, hx2 - hsz / 2, hy2 - hsz / 2, hsz, hsz);
+      ctx.restore();
+    }
 
     // тёплые пятна света от потолочных ламп
     [260, 700, 1010].forEach(function (lx) {
@@ -3941,17 +4780,49 @@
     ctx.fill();
     ctx.restore();
 
+    // зловещая красная подсветка из глубины кабинета
+    var redBack = ctx.createRadialGradient(800, 430, 40, 800, 430, 520);
+    redBack.addColorStop(0, 'rgba(150,26,38,0.32)');
+    redBack.addColorStop(0.55, 'rgba(120,18,30,0.12)');
+    redBack.addColorStop(1, 'rgba(120,18,30,0)');
+    ctx.fillStyle = redBack;
+    ctx.fillRect(180, 80, 1100, 640);
+
     // силуэты: босс за столом и охранник сбоку
     var boss = {
-      skin: 1, hair: '#191714', style: 'short', shirt: '#1b1b21', pants: '#141418',
-      coat: '#101014', beard: true, expr: 'angry'
+      skin: 1, hair: '#161412', style: 'short', shirt: '#f1e8d9', pants: '#191920',
+      coat: '#8e2440', hat: 'fedora', hatColor: '#8e2440', tie: '#141014',
+      beard: false, stubble: true, scar: true, cigar: true, evil: true,
+      expr: 'angry', build: 1.3, headScale: 0.92
     };
     var goon = {
-      skin: 3, hair: '#171412', style: 'short', shirt: '#20202a', pants: '#1a1a20',
-      coat: '#17171d', beard: true, expr: 'angry'
+      skin: 3, hair: '#131110', style: 'bald', shirt: '#22222a', pants: '#17171c',
+      coat: '#1e1e26', beard: true, shades: true, scar: true, stubble: true, evil: true,
+      expr: 'snarl', build: 1.42, headScale: 0.8
     };
     drawPerson(ctx, boss, 640, 610, 470, { sway: Math.sin(t * 0.7) * 0.012 });
     drawPerson(ctx, goon, 960, 664, 540, { sway: Math.sin(t * 0.9 + 1) * 0.01 });
+
+    // дым от сигары Босса
+    var bm = personMetrics(boss, 470);
+    var bmx = 640 + bm.headR * 0.86;
+    var bmy = 610 - bm.headCY + bm.headR * 0.62;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(215,210,200,0.16)';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    for (var ds = 0; ds < 3; ds++) {
+      var ph = t * 0.7 + ds * 1.9;
+      ctx.beginPath();
+      ctx.moveTo(bmx, bmy - 4);
+      ctx.bezierCurveTo(
+        bmx + 20 + Math.sin(ph) * 9, bmy - 60,
+        bmx - 24 + Math.cos(ph) * 9, bmy - 130,
+        bmx + 8 + Math.sin(ph * 0.7) * 12, bmy - 200 - ds * 26
+      );
+      ctx.stroke();
+    }
+    ctx.restore();
 
     // стол перед фигурами — поднят выше, чтобы кадр не резался кинополосами
     var desk = ctx.createLinearGradient(0, 500, 0, 720);
@@ -4240,6 +5111,454 @@
     ctx.fillRect(0, 0, W, H);
   };
 
+  /* ---------------- руки, инструменты и сцена вскрытия посылки ---------------- */
+  var SLEEVE = '#3f5f7d', SLEEVE_DARK = '#31506c', HAND_SKIN = '#f0c39a';
+
+  /* Рука от нижнего края экрана: игрок «наклоняется» и тянется к коробке */
+  function drawArmHand(ctx, fromX, fromY, toX, toY, opt) {
+    opt = opt || {};
+    var ang = Math.atan2(toY - fromY, toX - fromX) - Math.PI / 2;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = SLEEVE;
+    ctx.lineWidth = 46;
+    ctx.beginPath(); ctx.moveTo(fromX, fromY); ctx.lineTo(toX, toY + 26); ctx.stroke();
+    ctx.strokeStyle = SLEEVE_DARK;
+    ctx.lineWidth = 50;
+    ctx.beginPath(); ctx.moveTo(fromX, fromY); ctx.lineTo(fromX + (toX - fromX) * 0.4, fromY + (toY - fromY) * 0.4 + 26); ctx.stroke();
+    ctx.translate(toX, toY);
+    ctx.rotate(ang);
+    // манжета
+    fillRR(ctx, -25, 14, 50, 24, 9, '#2c4760');
+    // ладонь
+    ctx.fillStyle = opt.skin || HAND_SKIN;
+    ctx.beginPath(); ctx.ellipse(0, -2, 26, 30, 0, 0, Math.PI * 2); ctx.fill();
+    // большой палец
+    ctx.beginPath(); ctx.ellipse(-21, -5, 10, 15, -0.45, 0, Math.PI * 2); ctx.fill();
+    // пальцы
+    ctx.strokeStyle = opt.skin || HAND_SKIN;
+    ctx.lineWidth = 10; ctx.lineCap = 'round';
+    for (var fi = 0; fi < 3; fi++) {
+      ctx.beginPath();
+      ctx.moveTo(8, -16 + fi * 11);
+      ctx.lineTo(24, -19 + fi * 11);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  art.drawArmHand = drawArmHand;
+
+  function drawKnifeTool(ctx, x, y, angle, scale) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle || 0);
+    ctx.scale(scale || 1, scale || 1);
+    // лезвие
+    ctx.fillStyle = '#dbe1e4';
+    ctx.beginPath();
+    ctx.moveTo(-12, -5); ctx.lineTo(-108, -13); ctx.lineTo(-108, 5); ctx.lineTo(-12, 9);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#aab4ba'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-108, 3); ctx.lineTo(-16, 7); ctx.stroke();
+    // лезвие-«щёчка»
+    ctx.fillStyle = '#c3cbd0';
+    ctx.beginPath(); ctx.moveTo(-108, -13); ctx.lineTo(-78, -18); ctx.lineTo(-40, -9); ctx.lineTo(-108, -4); ctx.closePath(); ctx.fill();
+    // обойма
+    ctx.fillStyle = '#c9a227';
+    fillRR(ctx, -20, -12, 24, 24, 5);
+    // корпус
+    ctx.fillStyle = '#3c444c';
+    fillRR(ctx, 4, -15, 74, 30, 8);
+    ctx.fillStyle = '#2b3137';
+    fillRR(ctx, 10, -9, 10, 7, 2);
+    ctx.fillStyle = '#e4572e';
+    fillRR(ctx, 30, -5, 30, 7, 3);
+    ctx.restore();
+  }
+  art.drawKnifeTool = drawKnifeTool;
+
+  function drawScissorsTool(ctx, x, y, angle, scale) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle || 0);
+    ctx.scale(scale || 1, scale || 1);
+    ctx.lineCap = 'round';
+    // лезвия
+    ctx.strokeStyle = '#c3cbd0'; ctx.lineWidth = 11;
+    ctx.beginPath(); ctx.moveTo(-86, -24); ctx.lineTo(14, 6); ctx.stroke();
+    ctx.strokeStyle = '#aab4ba'; ctx.lineWidth = 11;
+    ctx.beginPath(); ctx.moveTo(-86, 24); ctx.lineTo(14, -6); ctx.stroke();
+    // винт
+    ctx.fillStyle = '#8f9aa1';
+    ctx.beginPath(); ctx.arc(2, 0, 6, 0, Math.PI * 2); ctx.fill();
+    // кольца
+    ctx.strokeStyle = '#e4572e'; ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.arc(46, -20, 17, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(46, 20, 17, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+  art.drawScissorsTool = drawScissorsTool;
+
+  function drawCarryBox(ctx, held, t) {
+    var bob = Math.sin(t * 3.2) * 3;
+    var bx = 548, by = 426 + bob, bw = 184, bh = 150;
+    var holdY = by + bh * 0.62;
+    softShadow(ctx, 640, 690, 110, 13, 0.28);
+    drawArmHand(ctx, 438, 790, bx - 4, holdY);
+    drawArmHand(ctx, 842, 790, bx + bw + 4, holdY);
+    drawParcel(ctx, bx, by, bw, bh, { seed: 3, rot: -0.02, code: held.code });
+    // ладони поверх боковых граней: коробку действительно держат
+    ctx.save();
+    ctx.fillStyle = HAND_SKIN;
+    ctx.beginPath(); ctx.ellipse(bx + 1, holdY, 22, 27, 0.15, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(bx + bw - 1, holdY, 22, 27, -0.15, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(120,80,50,0.25)';
+    ctx.lineWidth = 2;
+    for (var cf = 0; cf < 3; cf++) {
+      ctx.beginPath();
+      ctx.moveTo(bx + 7, holdY - 10 + cf * 9); ctx.lineTo(bx + 20, holdY - 9 + cf * 9);
+      ctx.moveTo(bx + bw - 7, holdY - 10 + cf * 9); ctx.lineTo(bx + bw - 20, holdY - 9 + cf * 9);
+      ctx.stroke();
+    }
+    ctx.restore();
+    if (held.scanned) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(90,200,140,0.9)';
+      ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.arc(bx + bw - 12, by + 12, 9, 0, Math.PI * 2);
+      ctx.fillStyle = '#5aa877'; ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawHandsCradle(ctx, x, y, w, t) {
+    var bob = Math.sin(t * 2.4) * 2;
+    drawArmHand(ctx, x - 30, 790, x + 6, y + bob);
+    drawArmHand(ctx, x + w + 30, 790, x + w - 6, y + bob);
+  }
+
+  /* Сцена вскрытия: крупный план коробки на столе, руки с ножом и ножницами.
+     Состояние u готовит сцена смены, здесь — только отрисовка. */
+  art.drawUnpackScene = function (ctx, u) {
+    u = u || {};
+    var t = u.t || 0;
+    var phase = u.phase || 'lean';
+    var lean = U.clamp(u.lean || 0, 0, 1);
+    var open = U.clamp(u.open || 0, 0, 1);
+    var bagT = U.clamp(u.bagShow == null ? 1 : u.bagShow, 0, 1);
+    var bagCut = U.clamp((u.snips || 0) / 3, 0, 1);
+    var progress = U.clamp(u.progress || 0, 0, 1);
+
+    // фон: тёплый крупный план столешницы
+    var bg = ctx.createLinearGradient(0, 0, 0, 720);
+    bg.addColorStop(0, '#2c1d13');
+    bg.addColorStop(0.45, '#412b1b');
+    bg.addColorStop(1, '#241710');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 1280, 720);
+    // древесные волокна
+    ctx.save();
+    ctx.globalAlpha = 0.13;
+    ctx.strokeStyle = '#1b1009';
+    for (var wi = 0; wi < 16; wi++) {
+      ctx.lineWidth = 1 + (wi % 3);
+      ctx.beginPath();
+      var wy = 60 + wi * 44;
+      ctx.moveTo(0, wy);
+      ctx.bezierCurveTo(360, wy + 9, 900, wy - 7, 1280, wy + 4);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // свет сверху
+    var sp = ctx.createRadialGradient(640, 330, 40, 640, 380, 620);
+    sp.addColorStop(0, 'rgba(255,226,180,0.3)');
+    sp.addColorStop(1, 'rgba(255,210,150,0)');
+    ctx.fillStyle = sp;
+    ctx.fillRect(0, 0, 1280, 720);
+
+    // коробка с наклоном игрока
+    ctx.save();
+    ctx.translate(640, 480);
+    ctx.scale(1 + 0.14 * lean, 1 + 0.14 * lean);
+    ctx.rotate(-0.012 * lean);
+    ctx.translate(-640, -480 - 26 * lean);
+
+    // тень под коробкой
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#120b06';
+    ctx.beginPath();
+    ctx.ellipse(640, 604, 300, 32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // передняя грань
+    var fg = ctx.createLinearGradient(0, 380, 0, 600);
+    fg.addColorStop(0, '#d4ac72');
+    fg.addColorStop(0.55, '#c69c62');
+    fg.addColorStop(1, '#a67f4c');
+    ctx.fillStyle = fg;
+    ctx.beginPath();
+    ctx.moveTo(350, 372); ctx.lineTo(890, 372); ctx.lineTo(872, 600); ctx.lineTo(368, 600);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(74,48,24,0.55)';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    // скотч по центру передней грани
+    ctx.save();
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = '#ecd9ab';
+    ctx.beginPath();
+    ctx.moveTo(624, 372); ctx.lineTo(664, 372); ctx.lineTo(660, 600); ctx.lineTo(628, 600);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    // наклейка с кодом
+    ctx.save();
+    ctx.translate(716, 470);
+    ctx.rotate(-0.02);
+    fillRR(ctx, 0, 0, 132, 82, 6, '#fffdf6');
+    ctx.fillStyle = '#2a2a2a';
+    for (var bi = 0; bi < 34; bi++) {
+      ctx.fillRect(10 + bi * 3.2, 8, bi % 3 === 0 ? 2 : 1, 22);
+    }
+    txt(ctx, 'ПВЗ · ' + (u.code || '----'), 12, 48, 12, '#2a2a2a', 800);
+    txt(ctx, 'ХРУПКОЕ', 12, 66, 10, '#8a5a30', 700);
+    ctx.restore();
+    // рёбра жёсткости
+    ctx.strokeStyle = 'rgba(90,60,30,0.25)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(368, 500); ctx.lineTo(872, 500); ctx.stroke();
+
+    // открытая коробка: тёмное нутро
+    if (open > 0.02) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, open * 2);
+      ctx.fillStyle = '#2a1a0f';
+      ctx.beginPath();
+      ctx.moveTo(350, 372); ctx.lineTo(890, 372); ctx.lineTo(842, 318); ctx.lineTo(398, 318);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    // дальний клапан (уходит назад)
+    ctx.save();
+    ctx.translate(0, -46 * open);
+    ctx.fillStyle = '#d2ab72';
+    ctx.beginPath();
+    ctx.moveTo(398, 318); ctx.lineTo(842, 318); ctx.lineTo(788, 258); ctx.lineTo(452, 258);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(74,48,24,0.45)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+
+    // скотч и линия разреза
+    if (open < 0.5) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(236,217,171,0.78)';
+      ctx.beginPath();
+      ctx.moveTo(386, 332); ctx.lineTo(854, 332); ctx.lineTo(829, 304); ctx.lineTo(411, 304);
+      ctx.closePath(); ctx.fill();
+      // прорезанная часть
+      if (progress > 0.01) {
+        var cutTo = 430 + 420 * progress;
+        // тень разреза и светлая кромка картона
+        ctx.strokeStyle = 'rgba(30,18,8,0.55)';
+        ctx.lineWidth = 9;
+        ctx.beginPath();
+        ctx.moveTo(430, 321);
+        ctx.quadraticCurveTo(640, 318 + Math.sin(t * 8) * 1.5, cutTo, 321);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(60,38,20,0.95)';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(430, 318);
+        ctx.quadraticCurveTo(640, 315 + Math.sin(t * 8) * 1.5, cutTo, 318);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,240,210,0.7)';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(430, 312); ctx.lineTo(cutTo, 312);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // пакет внутри
+    if (open > 0.4 && !(u.product > 0.25)) {
+      var ba = U.clamp((open - 0.4) / 0.45, 0, 1) * bagT;
+      var lift = 44 * ba;
+      ctx.save();
+      // пакет лежит внутри коробки: не даём ему «протечь» на переднюю грань
+      ctx.beginPath();
+      ctx.rect(360, 0, 640, 338);
+      ctx.clip();
+      ctx.globalAlpha = ba * (u.product > 0.02 ? 0.5 : 0.9);
+      ctx.translate(0, -lift);
+      // тело пакета
+      ctx.fillStyle = 'rgba(222,236,240,0.38)';
+      strokeRR(ctx, 512, 214, 256, 150, 26, 'rgba(255,255,255,0.55)', 2.5);
+      ctx.fill();
+      // содержимое (силуэт товара)
+      if (!(u.product > 0.02)) {
+        ctx.globalAlpha = ba * 0.5;
+        drawCatalogItem(ctx, u.item, u.kind, 552, 234, 176, 120, { shadow: false });
+      }
+      ctx.globalAlpha = ba * 0.9;
+      // горловина
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(560, 220); ctx.lineTo(720, 220); ctx.stroke();
+      ctx.fillStyle = 'rgba(200,220,230,0.5)';
+      ctx.fillRect(612, 202, 56, 22);
+      // разрезы
+      if (bagCut > 0.01) {
+        ctx.strokeStyle = 'rgba(40,30,20,0.75)';
+        ctx.lineWidth = 3;
+        var segs = Math.ceil(bagCut * 7);
+        ctx.beginPath();
+        for (var si = 0; si <= segs; si++) {
+          var sx = 560 + (160 / 7) * si;
+          var sy = 224 + (si % 2 ? 8 : -6) * bagCut;
+          if (si === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // ближний клапан поверх пакета: он отогнут к игроку и скрывает низ пакета
+    ctx.save();
+    ctx.translate(0, 26 * open);
+    var lg2 = ctx.createLinearGradient(0, 318, 0, 372);
+    lg2.addColorStop(0, '#e2bd86');
+    lg2.addColorStop(1, '#cba469');
+    ctx.fillStyle = lg2;
+    ctx.beginPath();
+    ctx.moveTo(398, 318); ctx.lineTo(842, 318); ctx.lineTo(890, 372); ctx.lineTo(350, 372);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(74,48,24,0.45)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+
+    // товар достают
+    if (u.product > 0.01) {
+      var pr = U.clamp(u.product, 0, 1);
+      var pScale = 1 + 0.08 * Math.sin(t * 3) * (1 - pr);
+      var px = 640, py = 308;
+      var pw = 286 * pr * pScale, phh = 286 * pr * pScale;
+      ctx.save();
+      if (phase === 'pull') {
+        var pp2 = U.clamp(u.pull || 0, 0, 1);
+        px = 640 - 420 * pp2;
+        py = 308 + 200 * pp2;
+        pw *= (1 - 0.45 * pp2);
+        phh *= (1 - 0.45 * pp2);
+        ctx.globalAlpha = 1 - pp2 * 0.5;
+      }
+      // мягкий ореол
+      ctx.save();
+      ctx.globalAlpha *= 0.5;
+      var halo = ctx.createRadialGradient(px, py, 20, px, py, 210);
+      halo.addColorStop(0, 'rgba(255,220,150,0.5)');
+      halo.addColorStop(1, 'rgba(255,220,150,0)');
+      ctx.fillStyle = halo;
+      ctx.fillRect(px - 200, py - 200, 400, 400);
+      ctx.restore();
+      drawCatalogItem(ctx, u.item, u.kind, px - pw / 2, py - phh / 2, pw, phh, { shadow: true });
+      ctx.restore();
+    }
+
+    // рука с инструментом — внутри «наклона», чтобы нож шёл точно по скотчу
+    if ((phase === 'cut' || phase === 'bagCut') && u.tool) {
+      var hx = u.hx == null ? 640 : u.hx;
+      var hy = u.hy == null ? 318 : u.hy;
+      drawArmHand(ctx, hx + 150, 800, hx, hy);
+      if (u.tool === 'knife') drawKnifeTool(ctx, hx - 4, hy, -0.16, 1.05);
+      else drawScissorsTool(ctx, hx - 6, hy, 0.1, 1.0);
+    }
+    ctx.restore(); // конец наклона
+
+    // инструменты на столе
+    if (phase === 'knifeIdle') {
+      var kp = 0.5 + 0.5 * Math.sin(t * 4);
+      ctx.save();
+      ctx.globalAlpha = 0.35 + kp * 0.4;
+      ctx.strokeStyle = '#ffd479';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([9, 7]);
+      ctx.beginPath(); ctx.ellipse(1000, 470, 118, 66, -0.12, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      drawKnifeTool(ctx, 1000, 470, -0.32, 1.25);
+      txt(ctx, 'Возьмите нож', 1000, 560, 14, '#ffd479', 800, 'center');
+    }
+    if (phase === 'scissorsIdle') {
+      var scp = 0.5 + 0.5 * Math.sin(t * 4);
+      ctx.save();
+      ctx.globalAlpha = 0.35 + scp * 0.4;
+      ctx.strokeStyle = '#ffd479';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([9, 7]);
+      ctx.beginPath(); ctx.ellipse(270, 470, 118, 66, 0.14, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      drawScissorsTool(ctx, 270, 470, 0.3, 1.15);
+      txt(ctx, 'Возьмите ножницы', 270, 560, 14, '#ffd479', 800, 'center');
+    }
+
+    // рука с инструментом
+    // (рисуется внутри группы наклона)
+
+    // верхняя панель с шагами
+    art.panel(ctx, 372, 18, 536, 92, { bg: 'rgba(16,11,8,0.93)', r: 14, border: 'rgba(255,200,150,0.28)' });
+    txt(ctx, 'ВСКРЫТИЕ ПОСЫЛКИ', 640, 42, 15, '#ffc27a', 800, 'center');
+    txt(ctx, 'заказ ' + (u.code || '—'), 640, 60, 11.5, 'rgba(255,235,215,0.55)', 700, 'center');
+    var steps = ['Нож', 'Пакет', 'Товар'];
+    var stepIdx = phase === 'cut' || phase === 'opening' || phase === 'knifeIdle' || phase === 'lean' ? 0
+      : phase === 'bagCut' ? 1 : 2;
+    for (var st2 = 0; st2 < 3; st2++) {
+      var sx2 = 412 + st2 * 152;
+      var on = st2 === stepIdx;
+      fillRR(ctx, sx2, 70, 136, 26, 13, on ? '#f2994a' : 'rgba(255,255,255,0.08)');
+      txt(ctx, (st2 + 1) + ' · ' + steps[st2], sx2 + 68, 88, 11.5, on ? '#2a1a10' : 'rgba(255,240,220,0.6)', 800, 'center');
+    }
+
+    // инструкция
+    var tip = '';
+    if (phase === 'lean') tip = 'Наклонитесь к коробке…';
+    else if (phase === 'knifeIdle') tip = 'Возьмите нож со стола — он справа.';
+    else if (phase === 'cut') tip = 'Зажмите и проведите ножом по скотчу слева направо.';
+    else if (phase === 'opening') tip = 'Коробка вскрыта. Внутри пакет.';
+    else if (phase === 'scissorsIdle') tip = 'Теперь возьмите ножницы слева.';
+    else if (phase === 'bagCut') tip = 'Разрежьте пакет ножницами: ' + Math.min(3, u.snips || 0) + ' / 3 надреза.';
+    else if (phase === 'product') tip = 'Достаньте «' + (u.item || 'товар') + '» — нажмите на него.';
+    else if (phase === 'pull') tip = 'Товар у вас в руках.';
+    if (tip) {
+      var tw = Math.min(900, txtW(ctx, tip, 16, 700) + 56);
+      ctx.save();
+      ctx.globalAlpha = 0.96;
+      art.panel(ctx, 640 - tw / 2, 120, tw, 42, { bg: 'rgba(16,11,8,0.72)', r: 21, border: 'rgba(255,200,150,0.16)' });
+      txt(ctx, tip, 640, 147, 16, '#ffe9cd', 700, 'center');
+      ctx.restore();
+    }
+
+    // прогресс разреза
+    if (phase === 'cut' || (phase === 'opening' && progress > 0)) {
+      art.bar(ctx, 420, 626, 440, 12, progress, '#f2994a', 'rgba(0,0,0,0.45)');
+    }
+    if (phase === 'bagCut') {
+      art.bar(ctx, 420, 626, 440, 12, (u.snips || 0) / 3, '#7fb4c2', 'rgba(0,0,0,0.45)');
+    }
+
+    // закрыть — в левом верхнем углу, чтобы не спорить с кнопками звука и полного экрана
+    var closeR = { x: 24, y: 24, w: 44, h: 44 };
+    var closeHov = U.hit(closeR, PVZ.input.x, PVZ.input.y);
+    fillRR(ctx, closeR.x, closeR.y, closeR.w, closeR.h, 10, closeHov ? 'rgba(242,153,74,0.95)' : 'rgba(16,11,8,0.8)');
+    txt(ctx, '✕', closeR.x + 22, closeR.y + 30, 18, closeHov ? '#2a1a10' : 'rgba(255,240,220,0.75)', 800, 'center');
+
+    // виньетка
+    var vg = ctx.createRadialGradient(640, 380, 260, 640, 380, 800);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(10,6,3,0.62)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, 1280, 720);
+  };
+
   /* ---------------- HUD ---------------- */
   /* Компактный HUD для телефона: две-три крупные строки вместо семи мелких панелей. */
   function drawHUDCompact(ctx, o) {
@@ -4369,17 +5688,21 @@
     }
 
     // удерживаемая посылка
-    if (o.held) {
+    if (o.held && !o.dialog) {
       panel(ctx, 16, 580, 392, 84, { bg: 'rgba(28,20,16,0.9)', r: 16 });
-      drawParcel(ctx, 32, 592, 54, 50, { seed: 2 });
-      txt(ctx, o.held.onTable ? 'НА СТОЛЕ' : 'В РУКАХ', 100, 606, 14, 'rgba(255,236,214,0.62)', 800);
+      if (o.held.unpacked) {
+        drawCatalogItem(ctx, o.held.item, o.held.kind, 30, 590, 56, 56);
+      } else {
+        drawParcel(ctx, 32, 592, 54, 50, { seed: 2 });
+      }
+      txt(ctx, o.held.unpacked ? 'ТОВАР В РУКАХ' : (o.held.onTable ? 'НА СТОЛЕ' : 'В РУКАХ'), 100, 606, 14, 'rgba(255,236,214,0.62)', 800);
       txt(ctx, o.held.code, 100, 634, 23, '#ffd479', 800);
-      txt(ctx, o.held.scanned ? 'штрихкод считан' : (o.held.onTable ? 'нужно сканировать' : 'положите на стол'), 100, 656, 13,
-        o.held.scanned ? '#8fe0a8' : '#ffb27a', 600);
+      txt(ctx, o.held.unpacked ? o.held.item : o.held.scanned ? 'вскройте коробку' : (o.held.onTable ? 'нужно сканировать' : 'положите на стол'), 100, 656, 13,
+        o.held.unpacked ? '#8fe0a8' : o.held.scanned ? '#ffd479' : '#ffb27a', 600);
     }
 
     // подсказка
-    if (o.hint) {
+    if (o.hint && !o.dialog) {
       var hw = Math.min(1180, txtW(ctx, o.hint, 18, 600) + 64);
       panel(ctx, (W - hw) / 2, 662, hw, 46, { bg: 'rgba(24,17,13,0.86)', r: 23, border: 'rgba(255,235,210,0.14)' });
       txt(ctx, o.hint, W / 2, 690, 18, '#f6ead9', 600, 'center');
@@ -4532,7 +5855,7 @@
     }
 
     // сканер
-    if (o.scannerHeld !== undefined) {
+    if (o.scannerHeld !== undefined && !o.dialog) {
       var sy2 = o.held ? 548 : 604;
       panel(ctx, 20, sy2, 208, 32, { bg: o.scannerHeld ? 'rgba(40,80,60,0.85)' : 'rgba(28,20,16,0.75)', r: 12 });
       ctx.beginPath();
@@ -4577,21 +5900,332 @@
     }
 
     // удерживаемая посылка
-    if (o.held) {
+    if (o.held && !o.dialog) {
       panel(ctx, 20, 588, 280, 62, { bg: 'rgba(28,20,16,0.88)', r: 14 });
-      drawParcel(ctx, 34, 598, 48, 44, { seed: 2 });
-      txt(ctx, o.held.onTable ? 'На столе:' : 'В руках:', 94, 612, 11, 'rgba(255,236,214,0.6)', 700);
+      if (o.held.unpacked) drawCatalogItem(ctx, o.held.item, o.held.kind, 32, 596, 52, 52, { shadow: false });
+      else drawParcel(ctx, 34, 598, 48, 44, { seed: 2 });
+      txt(ctx, o.held.unpacked ? 'Товар в руках:' : (o.held.onTable ? 'На столе:' : 'В руках:'), 94, 612, 11, 'rgba(255,236,214,0.6)', 700);
       txt(ctx, o.held.code, 94, 634, 17, '#ffd479', 800);
-      txt(ctx, o.held.scanned ? 'штрихкод считан' : (o.held.onTable ? 'нужно сканировать' : 'положите на стол'), 94, 648, 10,
-        o.held.scanned ? '#8fe0a8' : '#ffb27a', 600);
+      txt(ctx, o.held.unpacked ? o.held.item : o.held.scanned ? 'вскройте коробку' : (o.held.onTable ? 'нужно сканировать' : 'положите на стол'), 94, 648, 10,
+        o.held.unpacked ? '#8fe0a8' : o.held.scanned ? '#ffd479' : '#ffb27a', 600);
     }
 
     // подсказка
-    if (o.hint) {
+    if (o.hint && !o.dialog) {
       var hw = Math.min(860, txtW(ctx, o.hint, 14, 600) + 48);
       panel(ctx, (W - hw) / 2, 676, hw, 36, { bg: 'rgba(28,20,16,0.82)', r: 18, border: 'rgba(255,235,210,0.12)' });
       txt(ctx, o.hint, W / 2, 699, 14, '#f3e6d5', 600, 'center');
     }
+  };
+
+  /* ======================================================================
+     СЦЕНА ВЫДАЧИ И ОСОБОГО ГОСТЯ
+     ======================================================================
+     Небольшая «сцена в рамке» над диалогом: покупатель показывает вещь,
+     примеряет её у зеркала, слушает наушники; злой гость буянит среди
+     разбросанных коробок; проверяющая листает папку. Диалог рисуется поверх,
+     поэтому рамка занимает верхнюю половину экрана. */
+  function momentSparkles(ctx, x, y, r, t, color) {
+    for (var i = 0; i < 7; i++) {
+      var a = t * 1.6 + i * 0.9;
+      var rr = r * (0.5 + 0.5 * Math.sin(t * 2.2 + i));
+      var sx = x + Math.cos(a) * rr;
+      var sy = y + Math.sin(a * 1.3) * rr * 0.55;
+      var al = 0.18 + 0.6 * Math.abs(Math.sin(t * 2.5 + i * 1.7));
+      ctx.save();
+      ctx.globalAlpha = al;
+      ctx.fillStyle = color || '#ffd479';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - 4);
+      ctx.lineTo(sx + 2.4, sy);
+      ctx.lineTo(sx, sy + 4);
+      ctx.lineTo(sx - 2.4, sy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  art.drawMomentScene = function (ctx, o) {
+    if (!o || art.compact) return;
+    o = o || {};
+    var t = o.t || 0;
+    var kind = o.kind || 'item';
+    var x = 268, y = 40, w = 744, h = 452;
+    var rage = kind === 'rage';
+    var accent = rage ? '#e4572e' : kind === 'tryon' ? '#ffd479' : '#8fd0c0';
+
+    ctx.save();
+    // мягкое затемнение сцены, чтобы рамка читалась
+    ctx.fillStyle = 'rgba(8,5,4,0.38)';
+    ctx.fillRect(0, 0, 1280, 720);
+
+    // рамка
+    panel(ctx, x, y, w, h, {
+      bg: rage ? 'rgba(38,14,10,0.97)' : 'rgba(22,16,12,0.96)',
+      r: 22,
+      border: rage ? 'rgba(228,87,46,0.5)' : 'rgba(255,225,190,0.22)'
+    });
+
+    var ix = x + 22, iy = y + 24, iw = w - 44, ih = h - 46;
+    var stageTop = iy + 58;
+
+    // цветной градиент сцены
+    var g = ctx.createLinearGradient(0, iy, 0, iy + ih);
+    if (rage) {
+      g.addColorStop(0, 'rgba(120,30,18,0.42)');
+      g.addColorStop(0.55, 'rgba(60,18,12,0.26)');
+      g.addColorStop(1, 'rgba(16,8,6,0.5)');
+    } else if (kind === 'tryon') {
+      g.addColorStop(0, 'rgba(255,214,150,0.14)');
+      g.addColorStop(1, 'rgba(255,214,150,0.02)');
+    } else {
+      g.addColorStop(0, 'rgba(120,200,180,0.1)');
+      g.addColorStop(1, 'rgba(20,40,40,0.02)');
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(ix, stageTop, iw, ih - 58);
+
+    // фон сцены
+    if (kind === 'tryon') {
+      // примерочная: шторы и зеркало
+      for (var s = 0; s < 9; s++) {
+        ctx.fillStyle = s % 2 ? 'rgba(190,140,110,0.22)' : 'rgba(150,105,80,0.16)';
+        ctx.fillRect(ix + s * (iw / 9), stageTop, iw / 9, ih - 58);
+      }
+      fillRR(ctx, ix + 34, stageTop + 24, 150, ih - 122, 14, 'rgba(150,190,200,0.14)');
+      strokeRR(ctx, ix + 34, stageTop + 24, 150, ih - 122, 14, 'rgba(220,240,245,0.42)', 2);
+      ctx.fillStyle = 'rgba(240,250,255,0.08)';
+      ctx.fillRect(ix + 44, stageTop + 34, 24, ih - 142);
+      txt(ctx, 'ЗЕРКАЛО', ix + 109, stageTop + ih - 78, 11, 'rgba(220,240,245,0.4)', 700, 'center');
+    } else if (rage) {
+      // трещины на стене и разбросанные коробки
+      ctx.strokeStyle = 'rgba(255,150,110,0.35)';
+      ctx.lineWidth = 2;
+      for (var c = 0; c < 5; c++) {
+        var cx0 = ix + 40 + c * (iw / 6);
+        ctx.beginPath();
+        ctx.moveTo(cx0, stageTop + 10);
+        ctx.lineTo(cx0 + 22, stageTop + 90);
+        ctx.lineTo(cx0 + 4, stageTop + 150);
+        ctx.lineTo(cx0 + 34, stageTop + 220);
+        ctx.stroke();
+      }
+      for (var b = 0; b < 4; b++) {
+        var bx = ix + 46 + b * 74;
+        var by = stageTop + ih - 118 + (b % 2) * 16;
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate((b % 2 ? 1 : -1) * 0.22);
+        drawParcel(ctx, -30, -24, 62, 48, { seed: b, color: b % 2 ? '#b98f57' : '#c9a26a' });
+        ctx.restore();
+      }
+    } else if (kind === 'camera') {
+      // кольцевая лампа и штатив
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = '#ffd479';
+      ctx.lineWidth = 9;
+      ctx.beginPath();
+      ctx.arc(ix + 110, stageTop + 68, 40, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(220,200,170,0.5)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(ix + 110, stageTop + 108);
+      ctx.lineTo(ix + 110, stageTop + 210);
+      ctx.stroke();
+      fillRR(ctx, ix + 74, stageTop + 44, 22, 34, 5, 'rgba(30,26,24,0.9)');
+    } else if (kind === 'inspect') {
+      // папка с галочками
+      fillRR(ctx, ix + 44, stageTop + 30, 152, 196, 10, 'rgba(240,232,214,0.9)');
+      fillRR(ctx, ix + 60, stageTop + 56, 120, 10, 4, 'rgba(120,100,80,0.55)');
+      fillRR(ctx, ix + 60, stageTop + 80, 92, 8, 4, 'rgba(120,100,80,0.4)');
+      for (var ch = 0; ch < 3; ch++) {
+        ctx.strokeStyle = '#4a8a5a';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(ix + 62, stageTop + 120 + ch * 30);
+        ctx.lineTo(ix + 72, stageTop + 131 + ch * 30);
+        ctx.lineTo(ix + 88, stageTop + 110 + ch * 30);
+        ctx.stroke();
+      }
+    } else if (kind === 'money') {
+      for (var m = 0; m < 6; m++) {
+        ctx.save();
+        ctx.translate(ix + 70 + (m % 3) * 44, stageTop + 120 + Math.floor(m / 3) * 34 + Math.sin(t * 2 + m) * 4);
+        fillRR(ctx, -16, -10, 34, 22, 4, m % 2 ? '#d8c07a' : '#c9a95a');
+        ctx.strokeStyle = 'rgba(90,70,30,0.5)';
+        ctx.lineWidth = 1.4;
+        ctx.strokeRect(-16, -10, 34, 22);
+        ctx.restore();
+      }
+    } else if (kind === 'family') {
+      // трое малышей — простые силуэты, чтобы сцена не «мигала» случайными лицами
+      var kidCols = ['#e4572e', '#3f7fae', '#5aa877'];
+      for (var f = 0; f < 3; f++) {
+        var kx = ix + 74 + f * 48;
+        var ky = stageTop + 196 + Math.sin(t * 3 + f) * 4;
+        ctx.fillStyle = kidCols[f];
+        fillRR(ctx, kx - 13, ky - 52, 26, 44, 10);
+        ctx.beginPath();
+        ctx.arc(kx, ky - 64, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,230,200,0.9)';
+        ctx.beginPath();
+        ctx.arc(kx, ky - 66, 9, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (kind === 'mystery') {
+      txt(ctx, '?', ix + 120, stageTop + 150, 150, 'rgba(255,214,150,0.25)', 800, 'center');
+    }
+
+    // обжитая сцена: полки, тёплый свет и линия прилавка
+    if (kind !== 'tryon' && kind !== 'rage' && kind !== 'camera') {
+      for (var sh = 0; sh < 4; sh++) {
+        ctx.fillStyle = 'rgba(255,225,190,0.055)';
+        ctx.fillRect(ix + iw - 190, stageTop + 44 + sh * 42, 170, 5);
+        ctx.fillStyle = 'rgba(160,130,100,0.12)';
+        ctx.fillRect(ix + iw - 186, stageTop + 49 + sh * 42, 4, 30);
+        ctx.fillRect(ix + iw - 28, stageTop + 49 + sh * 42, 4, 30);
+      }
+      var warm = ctx.createRadialGradient(x + 150, stageTop + ih - 190, 20, x + 150, stageTop + ih - 190, 190);
+      warm.addColorStop(0, 'rgba(255,210,150,0.16)');
+      warm.addColorStop(1, 'rgba(255,210,150,0)');
+      ctx.fillStyle = warm;
+      ctx.fillRect(ix, stageTop, iw, ih - 58);
+      ctx.fillStyle = 'rgba(120,90,65,0.22)';
+      ctx.fillRect(ix + 22, stageTop + ih - 74, iw - 44, 4);
+    }
+
+    // подставка
+    ctx.beginPath();
+    ctx.ellipse(x + w * 0.58, stageTop + ih - 78, 180, 24, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fill();
+
+    // покупатель
+    var ph = kind === 'duo' ? 300 : rage ? 348 : 322;
+    var px = rage ? x + w * 0.66 : x + w * 0.58;
+    var pgy = stageTop + ih - 52;
+    var person = o.person || null;
+    if (person) {
+      if (kind === 'duo' && o.person2) {
+        drawPerson(ctx, o.person2, x + w * 0.37, pgy, ph - 20, { noShadow: true, sway: t * 1.2 });
+        drawPerson(ctx, person, x + w * 0.61, pgy, ph, { noShadow: true, sway: t * 1.4 + 1 });
+      } else {
+        drawPerson(ctx, person, px, pgy, ph, { noShadow: false, sway: kind === 'tryon' ? t * 2.4 : t * 1.2 });
+      }
+    }
+
+    // наушники — прямо на голове покупателя: сценка «слушает»
+    if (o.item) {
+      var pk = itemKindOf(o.item.item, o.item.kind);
+      if (pk === 'headphones' && person) {
+        var PM2 = personMetrics(person, ph);
+        var hy2 = pgy - PM2.headCY;
+        ctx.save();
+        ctx.strokeStyle = '#2f2a2a';
+        ctx.lineWidth = Math.max(4, ph * 0.026);
+        ctx.beginPath();
+        ctx.arc(px, hy2, PM2.headR * 1.2, Math.PI * 1.06, Math.PI * 1.94);
+        ctx.stroke();
+        [-1, 1].forEach(function (sd) {
+          ctx.beginPath();
+          ctx.arc(px + sd * PM2.headR * 1.18, hy2 + PM2.headR * 0.08, PM2.headR * 0.3, 0, Math.PI * 2);
+          ctx.fillStyle = '#3a3230';
+          ctx.fill();
+          ctx.strokeStyle = '#f2994a';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        });
+        ctx.restore();
+      }
+    }
+
+    // предмет / вешалка / товар
+    if (o.item) {
+      if (kind === 'tryon') {
+        // вешалка с вещью и подпись
+        fillRR(ctx, ix + 44, stageTop + 24, 152, 8, 4, 'rgba(190,160,120,0.65)');
+        ctx.strokeStyle = 'rgba(220,200,170,0.4)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ix + 120, stageTop + 32);
+        ctx.lineTo(ix + 120, stageTop + 52);
+        ctx.stroke();
+        drawCatalogItem(ctx, o.item.item, o.item.kind, ix + 82, stageTop + 54, 78, 78, { shadow: false });
+      } else if (kind !== 'duo') {
+        drawCatalogItem(ctx, o.item.item, o.item.kind, x + 74, stageTop + ih - 250, 120, 120);
+        txt(ctx, '«' + o.item.item + '»', x + 134, stageTop + ih - 116, 14, 'rgba(255,236,210,0.8)', 700, 'center');
+      }
+      if (kind === 'tryon') {
+        momentSparkles(ctx, px, pgy - ph * 0.55, 120, t, '#ffd479');
+      }
+    }
+    if (rage) {
+      momentSparkles(ctx, x + w * 0.4, stageTop + 120, 150, t, '#ff8a5c');
+      ctx.save();
+      ctx.globalAlpha = 0.25 + 0.12 * Math.sin(t * 8);
+      ctx.fillStyle = '#e4572e';
+      ctx.fillRect(ix, stageTop, iw, ih - 58);
+      ctx.restore();
+    }
+
+    // заголовок и подпись
+    txt(ctx, (o.title || 'Выдача').toUpperCase(), x + w / 2, y + 34, 17, rage ? '#ffb27a' : '#ffc27a', 800, 'center');
+    if (o.subtitle) txt(ctx, o.subtitle, x + w / 2, y + 55, 12, 'rgba(255,236,214,0.6)', 600, 'center');
+
+    // уголки рамки
+    ctx.strokeStyle = rage ? 'rgba(255,120,80,0.6)' : 'rgba(255,214,150,0.4)';
+    ctx.lineWidth = 2;
+    [[x + 14, y + 14, 1, 1], [x + w - 14, y + 14, -1, 1], [x + 14, y + h - 14, 1, -1], [x + w - 14, y + h - 14, -1, -1]]
+      .forEach(function (c) {
+        ctx.beginPath();
+        ctx.moveTo(c[0], c[1] + 14 * c[3]);
+        ctx.lineTo(c[0], c[1]);
+        ctx.lineTo(c[0] + 14 * c[2], c[1]);
+        ctx.stroke();
+      });
+    ctx.restore();
+  };
+
+  /* Осколки и обломки: короткая вспышка, когда злой гость сносит коробку. */
+  art.drawSmash = function (ctx, s) {
+    if (!s) return;
+    var t = s.t || 0;
+    if (t > 1.2) return;
+    var a = Math.max(0, 1 - t / 1.2);
+    var cx = s.x || 980, cy = s.y || 470;
+    ctx.save();
+    ctx.globalAlpha = a;
+    // вспышка
+    ctx.beginPath();
+    ctx.arc(cx, cy, 40 + t * 90, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,150,90,' + (0.22 * a) + ')';
+    ctx.fill();
+    // осколки
+    for (var i = 0; i < 9; i++) {
+      var ang = -1.2 + i * 0.32 + (s.seed || 0) * 0.1;
+      var dist = 18 + t * (120 + i * 9);
+      var fx = cx + Math.cos(ang) * dist;
+      var fy = cy + Math.sin(ang) * dist + t * t * 90;
+      ctx.save();
+      ctx.translate(fx, fy);
+      ctx.rotate(ang + t * 5);
+      ctx.fillStyle = i % 2 ? '#c9a26a' : '#e3d3b6';
+      ctx.fillRect(-5, -3, 10 + (i % 3) * 3, 6);
+      ctx.restore();
+    }
+    // пыль
+    for (var d = 0; d < 5; d++) {
+      ctx.beginPath();
+      ctx.arc(cx - 30 + d * 16, cy + 10 + Math.sin(t * 4 + d) * 8, 14 + t * 16, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(160,130,100,' + (0.16 * a) + ')';
+      ctx.fill();
+    }
+    ctx.restore();
   };
 
   art.fade = function (ctx, a, color) {

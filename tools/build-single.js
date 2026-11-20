@@ -18,6 +18,9 @@ function dataUri(file, mime) {
 
 let html = fs.readFileSync(path.join(GAME, 'index.html'), 'utf8');
 
+// автономный файл — всегда релизный: без DEV, ?dev= и демо-оплаты
+html = html.replace('<head>', '<head>\n<script>window.PVZ_RELEASE = true;</script>');
+
 // стили и скрипты — внутрь файла
 html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, function (_, href) {
   const css = fs.readFileSync(path.join(GAME, href), 'utf8');

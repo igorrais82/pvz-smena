@@ -165,7 +165,8 @@
     try {
       var tension = G.scene && G.scene.musicTension ? G.scene.musicTension() : 0.16;
       var mood = G.scene && G.scene.musicMood ? G.scene.musicMood() : 'calm';
-      PVZ.music.update(dt, G.paused ? 0.08 : tension, mood);
+      var phase = G.scene && G.scene.musicPhase ? G.scene.musicPhase() : null;
+      PVZ.music.update(dt, G.paused ? 0.08 : tension, mood, phase);
     } catch (e) { /* музыка не должна ломать игру */ }
 
     var ctx = G.ctx;
@@ -270,8 +271,10 @@
     applyDevQuery();
   }
 
-  /* отладочные точки входа: index.html?dev=day / warehouse / rack / evening / report / terminal */
+  /* отладочные точки входа: index.html?dev=day / warehouse / rack / evening / report / terminal.
+     В релизной сборке (window.PVZ_RELEASE) выключены полностью. */
   function applyDevQuery() {
+    if (window.PVZ_RELEASE) return;
     var params = new URLSearchParams(location.search);
     var dev = params.get('dev');
     if (!dev) return;
@@ -297,6 +300,33 @@
       s.debug.spawn();
       s.debug.spawn();
       s.debug.step();
+    } else if (dev === 'cast') {
+      dayScene();
+      setTimeout(function () { try { s.debug.castTalk('marina'); } catch (e) { /* ignore */ } }, 200);
+    } else if (dev === 'crowd') {
+      // бесконечный режим: на кадре не нужен вечерний визит мафии
+      PVZ.state.data.mode = 'endless';
+      PVZ.state.data.debt = 0;
+      PVZ.state.data.freed = true;
+      dayScene();
+      s.debug.st.day = 10;
+      s.debug.st.shiftOpen = true;
+      s.debug.st.doorOpen = true;
+      s.debug.st.lightsOn = true;
+      s.debug.st.clock = 15 * 60;
+      for (var ci = 0; ci < 8; ci++) s.debug.spawn('question');
+      s.debug.step();
+    } else if (dev === 'boxes') {
+      PVZ.state.data.mode = 'endless';
+      PVZ.state.data.debt = 0;
+      PVZ.state.data.freed = true;
+      s = PVZ.scenes.shift({ day: 5, phase: 'day' });
+      G.setScene(s);
+      s.debug.view('hall');
+      if (PVZ.boxes) {
+        ['ticking', 'meow', 'music', 'moving'].forEach(function (k) { PVZ.boxes.add(k, 5); });
+        s.debug.st.clock = 14 * 60;
+      }
     } else if (dev === 'pickup') {
       dayScene();
       s.debug.spawn('pickup');
@@ -369,7 +399,7 @@
       s.debug.step();
       s.debug.st.dev.open = true;
     } else if (dev === 'report') {
-      G.setScene(PVZ.scenes.report({ day: 3, served: 11, plan: 11, complaints: 1, returns: 2, received: 7, earned: 3120, rating: 4.4, money: 8640, bonus: 300, late: 1 }));
+      G.setScene(PVZ.scenes.report({ day: 3, served: 11, plan: 11, complaints: 1, returns: 2, received: 7, earned: 3120, rating: 4.4, money: 8640, bonus: 300, late: 1, referred: 3, refBonus: 90, boxStats: { shelf: 2, opened: 1, reported: 0, sent: 1, arrived: 2 }, castNums: 4 }));
     } else if (dev === 'intro') {
       G.setScene(PVZ.scenes.intro());
     } else if (dev === 'tutorial') {

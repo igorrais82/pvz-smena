@@ -113,6 +113,10 @@
     beep: function () { this.tone(2100, 0.06, 'square', 0.11); this.tone(2600, 0.05, 'square', 0.07, null, 0.05); },
     scanOk: function () { this.beep(); },
     scanFail: function () { this.tone(240, 0.12, 'square', 0.1, 160); },
+    /* нож по скотчу: короткий «вжик» шумом и низкий тон */
+    cut: function () { this.noise(0.26, 0.2, 3200); this.tone(420, 0.18, 'triangle', 0.06, 260); },
+    /* ножницы: два щелчка */
+    snip: function () { this.tone(1800, 0.035, 'square', 0.07); this.noise(0.04, 0.09, 4200); this.tone(1500, 0.035, 'square', 0.05, null, 0.06); },
     printer: function () { this.noise(0.18, 0.16, 2000); this.noise(0.12, 0.1, 1400, 0.16); },
     bell: function () { this.tone(1320, 0.4, 'sine', 0.09); this.tone(1760, 0.5, 'sine', 0.07, null, 0.09); },
     knock: function () { this.noise(0.07, 0.3, 220); this.noise(0.07, 0.22, 200, 0.13); },
@@ -133,301 +137,8 @@
     }
   });
 
-  /* ---------------- адаптивная музыка ---------------- */
-  /* Синтез без файлов: спокойная подложка, которая становится плотнее и быстрее
-     по мере роста напряжения (очередь, терпение, рейтинг, вечер). */
-  var M = (PVZ.music = {
-    ctx: null,
-    bus: null,
-    timer: null,
-    nextTime: 0,
-    step: 0,
-    tension: 0.16,
-    target: 0.16,
-    mood: 'calm',   // 'calm' | 'scary'
-    dark: 0,        // 0 — обычная музыка, 1 — страшная ночная тема
-    gainScale: 1,   // общая громкость фона (приложение «Радио ПВЗ»)
-    track: 1,       // индекс музыкальной темы в TRACKS
-    trackName: 'Радио ПВЗ',
-    silent: false,  // «Тишина» в радио: фон не играет
-    noiseBuf: null,
-
-    /* ---------------- музыкальные темы радио ---------------- */
-    /* Каждая тема — свой лад, темп, тембры и рисунок. Всё синтезируется
-       на лету: никаких файлов, но шесть узнаваемо разных эфиров. */
-    TRACKS: [
-      {
-        id: 'lofi', name: 'Lo-Fi', bpm: 68, wave: 'sine', padWave: 'triangle',
-        chords: [[57, 60, 64, 67], [53, 57, 60, 64], [48, 52, 55, 59], [55, 59, 62, 65]],
-        lead: [76, null, 79, null, 81, null, 79, null],
-        arp: false, kick: 0.5, hat: 0.3, swing: 0.55, padVol: 1.15, bassVol: 0.8
-      },
-      {
-        id: 'pvz', name: 'Радио ПВЗ', bpm: 78, wave: 'triangle', padWave: 'sine',
-        chords: [[57, 60, 64, 67], [53, 57, 60, 64], [48, 52, 55, 59], [55, 59, 62, 65]],
-        lead: [76, 79, 81, 84, 88, 84, 81, 79],
-        arp: true, kick: 0.8, hat: 0.6, swing: 0.5, padVol: 1, bassVol: 1
-      },
-      {
-        id: 'night', name: 'Ночной эфир', bpm: 92, wave: 'sawtooth', padWave: 'sawtooth',
-        chords: [[50, 53, 57, 60], [46, 50, 53, 57], [48, 52, 55, 59], [45, 48, 52, 55]],
-        lead: [74, null, 77, 81, null, 84, 81, 77],
-        arp: true, kick: 1, hat: 0.85, swing: 0.48, padVol: 0.7, bassVol: 1.3
-      },
-      {
-        id: 'jazz', name: 'Джаз-кафе', bpm: 84, wave: 'triangle', padWave: 'sine',
-        chords: [[55, 59, 62, 65], [53, 57, 60, 64], [50, 54, 57, 60], [48, 52, 55, 59]],
-        lead: [72, 76, null, 79, 77, null, 74, 72],
-        arp: true, kick: 0.65, hat: 0.7, swing: 0.62, padVol: 0.9, bassVol: 1.05
-      },
-      {
-        id: 'chip', name: '8-бит смена', bpm: 104, wave: 'square', padWave: 'square',
-        chords: [[57, 60, 64, 67], [59, 62, 66, 69], [52, 55, 59, 62], [55, 59, 62, 65]],
-        lead: [81, 84, 88, 84, 81, 79, 76, 79],
-        arp: true, kick: 0.9, hat: 1, swing: 0.5, padVol: 0.55, bassVol: 1.15
-      },
-      {
-        id: 'classic', name: 'Классика', bpm: 72, wave: 'sine', padWave: 'triangle',
-        chords: [[52, 55, 59, 64], [50, 53, 57, 62], [48, 52, 55, 60], [53, 57, 60, 65]],
-        lead: [76, 79, 83, 88, 83, 79, 76, 72],
-        arp: true, kick: 0.35, hat: 0.2, swing: 0.5, padVol: 1.1, bassVol: 0.75
-      }
-    ],
-
-    setTrack: function (index) {
-      var n = this.TRACKS.length;
-      var i = Math.round(Number(index) || 0);
-      if (i < 0 || i >= n) i = 1;
-      this.track = i;
-      this.trackName = this.TRACKS[i].name;
-    },
-    setSilent: function (v) { this.silent = !!v; },
-    trackAt: function () { return this.TRACKS[this.track] || this.TRACKS[0]; },
-    ensure: function () {
-      var a = PVZ.audio;
-      a.init();
-      if (!a.ctx) return false;
-      if (this.ctx === a.ctx) return true;
-      this.ctx = a.ctx;
-      this.bus = a.ctx.createGain();
-      this.bus.gain.value = 0.0001;
-      this.bus.connect(a.master);
-      this.nextTime = a.ctx.currentTime + 0.12;
-      this.step = 0;
-      if (!this.timer) {
-        this.timer = setInterval(function () { M.schedule(); }, 60);
-      }
-      return true;
-    },
-    setTension: function (v) { this.target = U.clamp(v, 0, 1); },
-    setMood: function (m) { this.mood = m === 'scary' ? 'scary' : 'calm'; },
-    /* Мгновенно включить тему (без плавного въезда) — для визита мафии */
-    snapMood: function (m) {
-      this.setMood(m);
-      this.dark = this.mood === 'scary' ? 1 : 0;
-    },
-    setGain: function (v) { this.gainScale = U.clamp(v == null ? 1 : v, 0.12, 1.2); },
-    update: function (dt, tension, mood) {
-      if (tension != null) this.target = U.clamp(tension, 0, 1);
-      if (mood) this.mood = mood === 'scary' ? 'scary' : 'calm';
-      var k = 1 - Math.exp(-dt * 0.55);
-      this.tension += (this.target - this.tension) * k;
-      // страшная тема включается плавно, но быстро
-      var wantedDark = this.mood === 'scary' ? 1 : 0;
-      this.dark += (wantedDark - this.dark) * (1 - Math.exp(-dt * 1.4));
-      if (this.dark < 0.002) this.dark = 0;
-      if (!this.ensure()) return;
-      var t = this.ctx.currentTime;
-      // во время страшной сцены фон не должен оказаться слишком тихим
-      var gain = this.mood === 'scary' ? Math.max(this.gainScale, 0.8) : this.gainScale;
-      var wanted = (PVZ.audio.muted || this.silent) ? 0.0001 : 0.55 * gain;
-      this.bus.gain.setTargetAtTime(wanted, t, 0.25);
-    },
-    midi: function (n) { return 440 * Math.pow(2, (n - 69) / 12); },
-    note: function (freq, when, dur, type, vol, opts) {
-      if (!this.ctx) return;
-      opts = opts || {};
-      var c = this.ctx, o = c.createOscillator(), g = c.createGain();
-      o.type = type || 'sine';
-      o.frequency.setValueAtTime(freq, when);
-      if (opts.slide) o.frequency.exponentialRampToValueAtTime(Math.max(20, opts.slide), when + dur);
-      var atk = opts.attack == null ? 0.01 : opts.attack;
-      g.gain.setValueAtTime(0.0001, when);
-      g.gain.linearRampToValueAtTime(vol, when + atk);
-      g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-      o.connect(g);
-      g.connect(this.bus);
-      o.start(when);
-      o.stop(when + dur + 0.05);
-    },
-    noise: function (when, dur, vol, freq, kind) {
-      if (!this.ctx) return;
-      var c = this.ctx;
-      if (!this.noiseBuf) {
-        var len = Math.floor(c.sampleRate * 0.5);
-        this.noiseBuf = c.createBuffer(1, len, c.sampleRate);
-        var d = this.noiseBuf.getChannelData(0);
-        for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-      }
-      var src = c.createBufferSource();
-      src.buffer = this.noiseBuf;
-      var f = c.createBiquadFilter();
-      f.type = kind || 'highpass';
-      f.frequency.value = freq || 5000;
-      var g = c.createGain();
-      g.gain.setValueAtTime(vol, when);
-      g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-      src.connect(f);
-      f.connect(g);
-      g.connect(this.bus);
-      src.start(when);
-    },
-    schedule: function () {
-      if (!this.ctx || PVZ.audio.muted || this.ctx.state !== 'running') {
-        if (this.ctx) this.nextTime = this.ctx.currentTime + 0.12;
-        return;
-      }
-      if (this.silent) {
-        if (this.ctx) this.nextTime = this.ctx.currentTime + 0.2;
-        return;
-      }
-      if (this.nextTime < this.ctx.currentTime - 0.5) this.nextTime = this.ctx.currentTime + 0.05;
-      var ahead = 0.35;
-      while (this.nextTime < this.ctx.currentTime + ahead) {
-        this.playStep(this.step, this.nextTime, this.tension, this.dark);
-        var tr = this.trackAt();
-        var bpm = (tr.bpm + this.tension * 24) * (1 - this.dark * 0.42);
-        this.nextTime += 60 / bpm / 2; // восьмая
-        this.step++;
-      }
-    },
-    playStep: function (step, when, tension, dark) {
-      var d = U.clamp(dark || 0, 0, 1);
-      if (d < 0.995) this.playCalmStep(step, when, tension, 1 - d);
-      if (d > 0.005) this.playScaryStep(step, when, d);
-    },
-    /* ---------------- спокойная/рабочая тема ---------------- */
-    /* Один движок — шесть характеров: тема задаёт темп, тембры, аккорды,
-       мелодию и плотность ритма. Напряжение в зале подмешивает тревожные
-       ноты и ускоряет эфир, но не ломает узнаваемость станции. */
-    playCalmStep: function (step, when, tension, gain) {
-      var tr = this.trackAt();
-      var b = step % 8;
-      var bar = Math.floor(step / 8);
-      var t = tension || 0;
-      gain = gain == null ? 1 : gain;
-      var bpm = tr.bpm + t * 24;
-      var eighth = 60 / bpm / 2;
-      var chord = tr.chords[bar % 4];
-      var swing = (b % 2 === 1) ? eighth * ((tr.swing || 0.5) - 0.5) * 0.28 : 0;
-
-      // подложка-пад раз в такт
-      if (b === 0) {
-        var padVol = (0.026 + t * 0.018) * gain * (tr.padVol || 1);
-        for (var pi = 1; pi < chord.length; pi++) {
-          M.note(M.midi(chord[pi] + 12), when, eighth * 7.6, tr.padWave || 'sine',
-            padVol * (pi === 1 ? 1 : 0.78), { attack: 0.75 });
-        }
-        M.note(M.midi(chord[0] - 12), when, eighth * 7.2, 'sine',
-          (0.045 + t * 0.02) * gain * (tr.bassVol || 1), { attack: 0.18 });
-      }
-
-      // бас: у каждой темы свой рисунок
-      var bassSteps = tr.id === 'chip' ? [0, 2, 4, 6] : tr.id === 'jazz' ? [0, 3, 4, 6] : [0, 3, 4, 6];
-      if (bassSteps.indexOf(b) >= 0) {
-        var root = chord[0] - (b >= 4 ? 12 : 24);
-        M.note(M.midi(root), when + swing, b === 0 ? eighth * 1.5 : eighth * 0.9,
-          tr.id === 'night' ? 'sawtooth' : 'triangle',
-          (0.033 + t * 0.022) * gain * (tr.bassVol || 1), { attack: 0.02 });
-      }
-
-      // арпеджио — у большинства тем
-      if (tr.arp) {
-        var an = chord[(b + bar) % chord.length] + 12;
-        M.note(M.midi(an), when + swing, eighth * 0.9, tr.wave || 'triangle',
-          (0.007 + t * 0.010) * gain, { attack: 0.008 });
-      }
-
-      // мелодия станции
-      var lead = tr.lead && tr.lead[b];
-      if (lead != null) {
-        var leadVol = (tr.id === 'lofi' ? 0.020 : tr.id === 'classic' ? 0.022 : 0.017) * gain;
-        M.note(M.midi(lead), when + swing, eighth * (tr.id === 'classic' ? 2.2 : 1.25),
-          tr.wave || 'sine', leadVol, { attack: tr.id === 'lofi' ? 0.08 : 0.02 });
-      }
-
-      // тревожный мотив поверх спокойного эфира
-      if (t > 0.7 && b % 2 === 1 && (bar + b) % 4 === 1) {
-        M.note(M.midi(chord[2] + 12), when, eighth * 0.8, 'square', 0.011 * gain, { attack: 0.005 });
-      }
-
-      // ритм: у каждой станции своя плотность
-      if (tr.kick && (b === 0 || b === 4)) {
-        M.note(M.midi(chord[0] - 24), when, 0.18, 'sine', 0.06 * gain * tr.kick,
-          { slide: M.midi(chord[0] - 30), attack: 0.004 });
-      }
-      if (tr.hat && (b % 2 === 1)) {
-        M.noise(when + 0.01, 0.03, 0.012 * gain * tr.hat, 7600);
-      }
-      if (t > 0.7 && (b === 2 || b === 6)) {
-        M.noise(when, 0.09, 0.022 * gain, 1900, 'bandpass');
-      }
-    },
-    /* ---------------- страшная тема: визит мафии ---------------- */
-    /* Медленный низкий дрон, тритоны, сердцебиение и скрипящие струны.
-       Никакой мелодии — только давление. */
-    playScaryStep: function (step, when, d) {
-      var b = step % 8;
-      var bar = Math.floor(step / 8);
-      var roots = [45, 44, 43, 41];       // A2, G#2, G2, F2 — сползание вниз
-      var root = roots[bar % roots.length];
-      var beat = 60 / (52 - d * 6) / 2;   // ~52 bpm, восьмые
-
-      // низкий гудящий дрон и тритон — раз в такт
-      if (b === 0) {
-        M.note(M.midi(root - 12), when, beat * 7.6, 'sine', 0.115 * d, { attack: 0.9 });
-        M.note(M.midi(root - 6), when, beat * 7.2, 'triangle', 0.035 * d, { attack: 1.5 });
-        M.note(M.midi(root - 11), when, beat * 7.4, 'sine', 0.022 * d, { attack: 1.2 });
-        // редкий вдох-шум, как сквозняк
-        M.noise(when, 2.4, 0.028 * d, 700, 'lowpass');
-      }
-
-      // сердцебиение: два удара
-      if (b === 0 || b === 4) {
-        M.note(M.midi(root - 24), when, 0.34, 'sine', 0.17 * d, { slide: M.midi(root - 31), attack: 0.004 });
-        M.note(M.midi(root - 24), when + beat * 0.55, 0.26, 'sine', 0.1 * d, { slide: M.midi(root - 31), attack: 0.004 });
-      }
-      if (b === 6) {
-        M.note(M.midi(root - 24), when, 0.2, 'sine', 0.06 * d, { slide: M.midi(root - 30), attack: 0.004 });
-      }
-
-      // скрипящие струны: малая секунда в высоком регистре
-      if (b === 1 || b === 5) {
-        var hi = root + 37;
-        M.note(M.midi(hi), when, 0.9, 'sawtooth', 0.016 * d, { attack: 0.35 });
-        M.note(M.midi(hi + 1), when + 0.04, 0.8, 'sawtooth', 0.012 * d, { attack: 0.4 });
-      }
-
-      // металлический удар — как шаги по складу
-      if (b === 3 || b === 6) {
-        M.noise(when, 0.16, 0.06 * d, 2100, 'bandpass');
-        M.note(M.midi(root + 12), when, 0.5, 'triangle', 0.014 * d, { attack: 0.005 });
-      }
-
-      // шёпот на каждом втором такте
-      if (d > 0.5 && b === 7 && bar % 2 === 1) {
-        M.noise(when, 0.55, 0.028 * d, 5200, 'highpass');
-        M.note(M.midi(root + 25), when, 0.32, 'square', 0.008 * d, { attack: 0.02 });
-      }
-
-      // далёкий грохот раз в 4 такта
-      if (b === 0 && bar % 4 === 3) {
-        M.note(M.midi(28), when, 1.4, 'sine', 0.09 * d, { slide: M.midi(20), attack: 0.06 });
-        M.noise(when, 1.1, 0.05 * d, 300, 'lowpass');
-      }
-    }
-  });
-
+  /* Музыка живёт в отдельном модуле src/music.js: движок, инструменты,
+     темы фаз, мафии и радио. Здесь остался только звук интерфейса. */
   /* ---------------- ввод: мышь / тач / клавиатура ---------------- */
   var I = (PVZ.input = {
     x: 640, y: 360,
@@ -607,8 +318,8 @@
         totals: { days: 0, served: 0, complaints: 0, earned: 0, returns: 0, bestRating: 0, minigame: 0 },
         settings: { sound: true, hints: true },
         shift: null,
-        // приложения на ноутбуке: магазин, телефон и Premium store стоят сразу
-        apps: ['appstore', 'phone', 'premium'],
+        // приложения на ноутбуке: магазин, телефон, Premium store и Мессенджер стоят сразу
+        apps: ['appstore', 'phone', 'premium', 'chat'],
         radioStation: 2,
         radioVolume: 1,
         // Premium store: монеты за рекламу и покупки, подписка «ПВЗ Плюс»,
@@ -628,8 +339,30 @@
           rubSpent: 0,
           purchases: 0
         },
-        // переписка в «Мессенджере»: Артём и рабочие чаты
+        // переписка в «Мессенджере»: Артём, мама, поддержка и сюжетные знакомые
         chatLog: [],
+        // открытые контакты (кто оставил номер) и пройденные разговоры
+        chatUnlocked: [],
+        chatDone: {},
+        chatPosted: {},
+        chatIdleDone: {},
+        // сюжетные покупатели: какие визиты уже были
+        npcSeen: {},
+        // постоянные персонажи: отношения, пройденные истории, номера и рекомендации
+        cast: {
+          rel: {},       // id персонажа → отношения (-5..8)
+          beats: {},     // id персонажа → пройденные личные истории
+          met: {},       // id персонажа → день знакомства
+          refs: {},      // id персонажа → сколько знакомых он привёл
+          lastDay: {},   // id персонажа → когда заходил в последний раз
+          daySeen: { day: 1, ids: {} },
+          nums: [],      // кто уже оставил номер телефона
+          totalRefs: 0   // сколько людей пришло по рекомендации за забег
+        },
+        // «забытые» посылки: те, которые никто не берёт
+        suspicious: { boxes: [], seq: 0, opened: 0, reported: 0, sent: 0, arrived: 0, lastArrive: 0 },
+        // какие темы разговоров уже обсуждали (чтобы не повторяться)
+        talkSeen: [],
         // Артём приходит через смену: какие дни уже навестил
         friendDays: [],
         bossCallDay: 0,
@@ -686,7 +419,7 @@
     newGame: function (mode) {
       var keepPremium = this.data && this.data.premium ? JSON.parse(JSON.stringify(this.data.premium)) : null;
       var keepApps = this.data && Array.isArray(this.data.apps) ? this.data.apps.filter(function (id) {
-        return id === 'premium' || id === 'appstore' || id === 'phone';
+        return id === 'premium' || id === 'appstore' || id === 'phone' || id === 'chat';
       }) : null;
       this.data = this.fresh();
       // Premium-покупки — мета-прогресс: не теряются при новом забеге
@@ -787,10 +520,12 @@
         this.data.stats = Object.assign({ served: 0, complaints: 0, earned: 0, returns: 0 }, d.stats || {});
         if (!Array.isArray(this.data.owned)) this.data.owned = [];
         var hadApps = Array.isArray(d.apps);
-        if (!hadApps) this.data.apps = ['appstore', 'phone', 'premium'];
+        if (!hadApps) this.data.apps = ['appstore', 'phone', 'premium', 'chat'];
         if (this.data.apps.indexOf('appstore') < 0) this.data.apps.push('appstore');
         if (this.data.apps.indexOf('phone') < 0) this.data.apps.push('phone');
         if (this.data.apps.indexOf('premium') < 0) this.data.apps.push('premium');
+        // «Мессенджер» стоит в системе по умолчанию: он нужен сюжету
+        if (this.data.apps.indexOf('chat') < 0) this.data.apps.push('chat');
         // старые сохранения: если забег уже идёт, приложения считаются установленными
         if (!hadApps && ((this.data.day || 1) > 1 || this.data.shift)) {
           var legacyApps = ['terminal', 'market', 'reviews', 'game'];
@@ -825,6 +560,44 @@
         if (typeof pr.dailyClaim !== 'string') pr.dailyClaim = '';
         if (typeof pr.lastAdAt !== 'number') pr.lastAdAt = 0;
         if (!Array.isArray(this.data.chatLog)) this.data.chatLog = [];
+        // живые покупатели и переписка появились позже: досоздаём поля
+        if (!Array.isArray(this.data.chatUnlocked)) this.data.chatUnlocked = [];
+        if (!this.data.chatDone || typeof this.data.chatDone !== 'object') this.data.chatDone = {};
+        if (!this.data.chatPosted || typeof this.data.chatPosted !== 'object') this.data.chatPosted = {};
+        if (!this.data.chatIdleDone || typeof this.data.chatIdleDone !== 'object') this.data.chatIdleDone = {};
+        if (!this.data.npcSeen || typeof this.data.npcSeen !== 'object') this.data.npcSeen = {};
+        // постоянные персонажи и «забытые» посылки появились позже: досоздаём у старых сейвов
+        if (!this.data.cast || typeof this.data.cast !== 'object') {
+          this.data.cast = {
+            rel: {}, beats: {}, met: {}, refs: {}, lastDay: {},
+            daySeen: { day: this.data.day || 1, ids: {} }, nums: [], totalRefs: 0
+          };
+        } else {
+          var cs = this.data.cast;
+          if (!cs.rel || typeof cs.rel !== 'object') cs.rel = {};
+          if (!cs.beats || typeof cs.beats !== 'object') cs.beats = {};
+          if (!cs.met || typeof cs.met !== 'object') cs.met = {};
+          if (!cs.refs || typeof cs.refs !== 'object') cs.refs = {};
+          if (!cs.lastDay || typeof cs.lastDay !== 'object') cs.lastDay = {};
+          if (!Array.isArray(cs.nums)) cs.nums = [];
+          if (typeof cs.totalRefs !== 'number') cs.totalRefs = 0;
+          if (!cs.daySeen || typeof cs.daySeen !== 'object') cs.daySeen = { day: this.data.day || 1, ids: {} };
+          if (!cs.daySeen.ids || typeof cs.daySeen.ids !== 'object') cs.daySeen.ids = {};
+          if (cs.daySeen.day !== (this.data.day || 1)) cs.daySeen = { day: this.data.day || 1, ids: {} };
+        }
+        if (!this.data.suspicious || typeof this.data.suspicious !== 'object') {
+          this.data.suspicious = { boxes: [], seq: 0, opened: 0, reported: 0, sent: 0, arrived: 0, lastArrive: 0 };
+        } else {
+          var su = this.data.suspicious;
+          if (!Array.isArray(su.boxes)) su.boxes = [];
+          if (typeof su.seq !== 'number') su.seq = su.boxes.length;
+          if (typeof su.opened !== 'number') su.opened = 0;
+          if (typeof su.reported !== 'number') su.reported = 0;
+          if (typeof su.sent !== 'number') su.sent = 0;
+          if (typeof su.arrived !== 'number') su.arrived = su.boxes.length;
+          if (typeof su.lastArrive !== 'number') su.lastArrive = 0;
+        }
+        if (!Array.isArray(this.data.talkSeen)) this.data.talkSeen = [];
         if (!Array.isArray(this.data.friendDays)) this.data.friendDays = [];
         if (typeof this.data.bossCallDay !== 'number') this.data.bossCallDay = 0;
         if (typeof this.data.radioVolume !== 'number') this.data.radioVolume = 1;
@@ -1084,13 +857,13 @@
       return true;
     },
 
-    /* Сообщения мессенджера: храним последние 40, чтобы сейв не разрастался */
+    /* Сообщения мессенджера: храним последние 160 — переписок стало больше */
     chatAdd: function (from, text, to) {
       if (!this.data) return null;
       if (!Array.isArray(this.data.chatLog)) this.data.chatLog = [];
       var m = { from: from || 'artem', to: to || 'artem', text: String(text || ''), day: this.data.day || 1 };
       this.data.chatLog.push(m);
-      while (this.data.chatLog.length > 40) this.data.chatLog.shift();
+      while (this.data.chatLog.length > 160) this.data.chatLog.shift();
       return m;
     },
 

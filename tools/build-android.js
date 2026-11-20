@@ -99,7 +99,9 @@ fs.writeFileSync(gradleFile, gradle);
 // 5. Gradle
 const gradleBat = findGradle();
 console.log('Gradle:', gradleBat);
-const command = '"' + gradleBat + '" -p "' + ANDROID + '" assembleRelease --no-daemon --console=plain';
+// GRADLE_OFFLINE=1 — сборка без сети, на уже скачанных зависимостях
+const offline = process.env.GRADLE_OFFLINE === '1' ? ' --offline' : '';
+const command = '"' + gradleBat + '" -p "' + ANDROID + '" assembleRelease --no-daemon --console=plain' + offline;
 const result = spawnSync(command, [], {
   stdio: 'inherit',
   shell: true,

@@ -294,7 +294,7 @@
     p.phone = opts.phone || pickPhone();
     p.phoneLabel = (sys.PHONES.find(function (x) { return x.id === p.phone; }) || {}).label || 'смартфон';
     p.coat = U.chance(0.45) ? U.pick(['#4a5f7a', '#7a4a4a', '#5d6a4e', '#3e4a5a', '#8a6a4a']) : null;
-    p.height = U.rand(0.93, 1.08);
+    p.height = U.rand(0.90, 1.14);
     p.bubble = null;
     p.bubbleAlpha = 0;
     return p;
@@ -464,16 +464,33 @@
     this.full = this.text.length;
     this.tt = 0;
     this.onClose = opts.onClose || null;
+    this.scary = !!opts.scary;
     this.panel = { x: 120, y: 240, w: 1040, h: 426 };
-    this.portrait = { x: 214, y: 330, r: 70 };
+    this.portrait = { x: 92, y: 594, r: 52 };
     this.choiceRects = [];
-    var n = this.choices.length;
-    var top = 372;
-    var gap = Math.min(60, 300 / Math.max(1, n));
-    for (var i = 0; i < n; i++) {
-      this.choiceRects.push({ x: 316, y: top + i * gap, w: 790, h: 46 });
-    }
+    this.layoutChoices();
   }
+  /* Раскладка вариантов в духе The Walking Dead: стопка у правого нижнего
+     края, поверх живой сцены. Та же формула вызывается из конструктора,
+     поэтому попадания по вариантам работают ещё до первого кадра. */
+  Dialogue.prototype.layoutChoices = function () {
+    var compact = !!art.compact;
+    var n = this.choices.length;
+    var gap = 8;
+    var h = compact ? 68 : 58;
+    var bottom = compact ? 654 : 686;
+    var x = compact ? 40 : 740;
+    var w = compact ? 1200 : 500;
+    var top = bottom - n * h - Math.max(0, n - 1) * gap;
+    if (compact && top < 252) {
+      h = Math.max(46, Math.floor((bottom - 252 - (n - 1) * gap) / Math.max(1, n)));
+      top = bottom - n * h - Math.max(0, n - 1) * gap;
+    }
+    this.choiceRects = [];
+    for (var i = 0; i < n; i++) {
+      this.choiceRects.push({ x: x, y: top + i * (h + gap), w: w, h: h });
+    }
+  };
   Dialogue.prototype.update = function (dt) {
     this.tt += dt;
     if (this.revealed < this.full) this.revealed = Math.min(this.full, this.revealed + dt * 90);
@@ -481,96 +498,140 @@
   Dialogue.prototype.draw = function (ctx) {
     var W = 1280, H = 720;
     var compact = !!art.compact;
-    var p = compact ? { x: 24, y: 48, w: 1232, h: 624 } : this.panel;
-    var pr = compact ? { x: 150, y: 158, r: 82 } : this.portrait;
+    this.layoutChoices();
     ctx.save();
     ctx.globalAlpha = Math.min(1, this.tt * 6);
-    ctx.fillStyle = 'rgba(10,7,5,0.6)';
-    ctx.fillRect(0, 0, W, H);
-    art.panel(ctx, p.x, p.y, p.w, p.h, { bg: 'rgba(30,22,18,0.975)', r: 20, border: 'rgba(255,230,200,0.18)' });
 
-    // портрет
+    if (compact) {
+      // на телефоне диалог остаётся крупным окном, но варианты — снизу
+      art.panel(ctx, 24, 48, 1232, 624, { bg: 'rgba(24,17,13,0.975)', r: 20, border: 'rgba(255,230,200,0.18)' });
+      var cg = ctx.createLinearGradient(0, 400, 0, 672);
+      cg.addColorStop(0, 'rgba(0,0,0,0)');
+      cg.addColorStop(1, 'rgba(0,0,0,0.38)');
+      ctx.fillStyle = cg;
+      ctx.fillRect(24, 400, 1232, 272);
+    } else {
+      // как в TWD: сцена не закрыта панелью, только мягкое затемнение снизу
+      var g = ctx.createLinearGradient(0, 230, 0, H);
+      g.addColorStop(0, 'rgba(8,5,4,0)');
+      g.addColorStop(0.42, 'rgba(8,5,4,0.5)');
+      g.addColorStop(1, 'rgba(8,5,4,0.9)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      var lgd = ctx.createLinearGradient(0, 380, 520, 720);
+      lgd.addColorStop(0, 'rgba(8,5,4,0.5)');
+      lgd.addColorStop(1, 'rgba(8,5,4,0)');
+      ctx.fillStyle = lgd;
+      ctx.fillRect(0, 380, 560, 340);
+    }
+
+    var pr = compact ? { x: 150, y: 158, r: 82 } : this.portrait;
+    var nx0 = compact ? 270 : 168;
+    var nameY = compact ? 118 : 520;
+
+    // портрет: маленький «бейдж говорящего» в левом нижнем углу
     ctx.save();
     ctx.beginPath();
     ctx.arc(pr.x, pr.y, pr.r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(242,153,74,0.14)';
+    ctx.fillStyle = compact ? 'rgba(242,153,74,0.14)' : 'rgba(242,153,74,0.12)';
     ctx.fill();
     ctx.clip();
     if (this.person) {
-      ctx.translate(pr.x, pr.y + 250);
-      art.drawPerson(ctx, this.person, 0, 0, compact ? 320 : 300, { noShadow: true, noBag: true, sway: this.tt * 1.2 });
+      var ph = compact ? 340 : 238;
+      var pm = art.personMetrics(this.person, ph);
+      ctx.translate(pr.x, pr.y + 8 + pm.headCY);
+      art.drawPerson(ctx, this.person, 0, 0, ph, { noShadow: true, noBag: true, sway: this.tt * 1.2 });
     } else {
-      art.txt(ctx, this.icon || '☎', pr.x, pr.y + 20, 64, 'rgba(255,220,180,0.7)', 700, 'center');
+      art.txt(ctx, this.icon || '☎', pr.x, pr.y + (compact ? 20 : 16), compact ? 64 : 44, 'rgba(255,220,180,0.75)', 700, 'center');
     }
     ctx.restore();
     ctx.beginPath();
     ctx.arc(pr.x, pr.y, pr.r, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(242,153,74,0.55)';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(242,153,74,0.6)';
+    ctx.lineWidth = compact ? 3 : 2.4;
     ctx.stroke();
 
-    // имя и роль
-    var nx0 = compact ? 270 : 316;
-    art.txt(ctx, this.name, nx0, compact ? 118 : 286, compact ? 26 : 18, '#ffc27a', 800);
-    var nx = nx0 + art.txtW(ctx, this.name, compact ? 26 : 18, 800) + 14;
-    if (this.role) art.txt(ctx, this.role, nx, compact ? 118 : 286, compact ? 16 : 13, 'rgba(255,235,215,0.6)', 600);
+    // имя, роль и настроение
+    art.txt(ctx, this.name, nx0, nameY, compact ? 26 : 19, '#ffc27a', 800);
+    var nx = nx0 + art.txtW(ctx, this.name, compact ? 26 : 19, 800) + 14;
+    if (this.role) art.txt(ctx, this.role, nx, nameY, compact ? 16 : 12.5, 'rgba(255,235,215,0.6)', 600);
     if (this.mood) {
-      var mx = nx + (this.role ? art.txtW(ctx, this.role, compact ? 16 : 13, 600) + 16 : 0);
-      art.txt(ctx, this.mood, mx, compact ? 118 : 286, compact ? 16 : 12, 'rgba(255,200,140,0.8)', 600);
+      var mx = nx + (this.role ? art.txtW(ctx, this.role, compact ? 16 : 12.5, 600) + 16 : 0);
+      art.txt(ctx, this.mood, mx, nameY, compact ? 16 : 12, 'rgba(255,200,140,0.85)', 600);
     }
 
-    // текст с проявлением (до 3 строк)
+    // реплика с проявлением
     var shown = this.text.slice(0, Math.floor(this.revealed));
-    var textW = compact ? 940 : 860;
+    var textW = compact ? 940 : 552;
     var textSize = compact ? 24 : 19;
-    var lineH = compact ? 34 : 27;
-    var textTop = compact ? 168 : 320;
+    var lineH = compact ? 34 : 25;
+    var textTop = compact ? 168 : 552;
+    var maxLines = compact ? 3 : 6;
     var lines = U.wrapLines(ctx, shown, textW, textSize, 600);
     var fullLines = U.wrapLines(ctx, this.text, textW, textSize, 600);
-    // если текст не влез в три строки — честное многоточие вместо обрыва на полуслове
-    if (fullLines.length > 3 && lines.length >= 3 && this.revealed >= this.full) {
-      lines[2] = lines[2].replace(/\s+\S*$/, '') + '…';
+    if (fullLines.length > maxLines && lines.length >= maxLines && this.revealed >= this.full) {
+      lines[maxLines - 1] = lines[maxLines - 1].replace(/\s+\S*$/, '') + '…';
     }
-    lines.slice(0, 3).forEach(function (l, idx) {
+    lines.slice(0, maxLines).forEach(function (l, idx) {
       art.txt(ctx, l, nx0, textTop + idx * lineH, textSize, '#f6e9d8', 600);
     });
-    // Варианты не должны наезжать на длинный текст и вылезать за панель:
-    // раскладываем их после последней строки и поджимаем шаг под их число.
+
+    // варианты — стопкой в правом нижнем углу (стиль Telltale)
     var n = this.choices.length;
-    var choiceH = compact ? 56 : 46;
-    var bottom = p.y + p.h - (compact ? 14 : 14);
-    if (n) {
-      var top = compact
-        ? Math.max(300, textTop + (Math.min(3, fullLines.length) - 1) * lineH + 30)
-        : Math.max(372, textTop + (Math.min(3, fullLines.length) - 1) * lineH + 28);
-      var gap = n > 1 ? Math.min(compact ? 64 : 60, (bottom - choiceH - top) / (n - 1)) : 60;
-      if (gap < (compact ? 46 : 30)) gap = compact ? 46 : 30;
-      for (var ci = 0; ci < n; ci++) {
-        this.choiceRects[ci] = {
-          x: compact ? 44 : 316, y: top + ci * gap,
-          w: compact ? 1192 : 790, h: choiceH
-        };
+    var hintSize = compact ? 13 : 11;
+    for (var i = 0; i < n; i++) {
+      var lsize = compact ? 19 : 16;
+      var r = this.choiceRects[i];
+      var appear = U.clamp((this.tt - (0.12 + i * 0.06)) * 5, 0, 1);
+      if (appear <= 0.01) continue;
+      var c = this.choices[i];
+      var hover = U.hit(r, PVZ.input.x, PVZ.input.y) && PVZ.input.touch === false;
+      var dx = (1 - appear) * 28;
+      var rx = r.x + dx;
+      var fg = hover ? '#2a1a10' : '#f7ead8';
+      ctx.save();
+      ctx.globalAlpha *= appear;
+      if (hover) {
+        ctx.shadowColor = 'rgba(0,0,0,0.45)';
+        ctx.shadowBlur = 16;
+        ctx.shadowOffsetY = 4;
       }
+      art.fillRR(ctx, rx, r.y, r.w, r.h, 9, hover ? 'rgba(247,238,225,0.97)' : 'rgba(15,10,8,0.82)');
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha *= appear;
+      art.strokeRR(ctx, rx, r.y, r.w, r.h, 9, hover ? 'rgba(255,255,255,0.9)' : 'rgba(255,235,210,0.2)', 1.3);
+      // акцентная полоска и номер варианта
+      art.fillRR(ctx, rx + 5, r.y + 8, 4, r.h - 16, 2, hover ? '#d97b2f' : '#f2994a');
+      var cy = r.y + r.h / 2;
+      art.txt(ctx, String(i + 1), rx + 27, cy + 5, compact ? 14 : 12, hover ? 'rgba(42,26,16,0.55)' : 'rgba(255,214,150,0.55)', 800, 'center');
+      // текст варианта: до двух строк, иначе мельче
+      var labelW = r.w - 84;
+      var labelLines = U.wrapLines(ctx, c.label, labelW, lsize, 700);
+      if (labelLines.length > 2) {
+        lsize = compact ? 16 : 14;
+        labelLines = U.wrapLines(ctx, c.label, labelW, lsize, 700);
+        if (labelLines.length > 2) {
+          labelLines = [art.fitTxt(ctx, c.label, labelW, lsize, 700, 10).text];
+        }
+      }
+      var lh = lsize + (compact ? 4 : 3);
+      var hint = c.hint ? sys.hintLabel(c.hint) : '';
+      var blockH = labelLines.length * lh + (hint ? hintSize + 5 : 0);
+      var y0 = r.y + (r.h - blockH) / 2 + lsize * 0.86;
+      labelLines.forEach(function (ln, li) {
+        art.txt(ctx, ln, rx + 48, y0 + li * lh, lsize, fg, 700);
+      });
+      if (hint) {
+        art.txt(ctx, art.fitTxt(ctx, hint, r.w - 84, hintSize, 700, 9).text, rx + 48, y0 + labelLines.length * lh + 2,
+          hintSize, hover ? 'rgba(70,44,22,0.8)' : 'rgba(255,214,150,0.8)', 700);
+      }
+      ctx.restore();
     }
 
-    // варианты: слева действие, справа — цена решения
-    this.choices.forEach(function (c, i) {
-      var r = this.choiceRects[i];
-      var hover = U.hit(r, PVZ.input.x, PVZ.input.y) && PVZ.input.touch === false;
-      var bg = hover ? '#f2994a' : 'rgba(56,41,33,0.94)';
-      var fg = hover ? '#2a1a10' : '#f7ead8';
-      art.fillRR(ctx, r.x, r.y, r.w, r.h, 10, bg);
-      art.strokeRR(ctx, r.x, r.y, r.w, r.h, 10, hover ? '#ffdcb0' : 'rgba(255,235,210,0.16)', 1.4);
-      var label = (i + 1) + '. ' + c.label;
-      var lsize = compact ? 20 : 16;
-      var maxL = r.w - (c.hint ? 260 : 32);
-      var fit = art.fitTxt(ctx, label, maxL, lsize, 700, compact ? 14 : 12);
-      art.txt(ctx, fit.text, r.x + 18, r.y + r.h / 2 + (compact ? 7 : 6), fit.size, fg, 700);
-      if (c.hint) {
-        art.txt(ctx, sys.hintLabel(c.hint), r.x + r.w - 18, r.y + r.h / 2 + 6, compact ? 16 : 13, hover ? 'rgba(42,26,16,0.85)' : 'rgba(255,214,150,0.85)', 700, 'right');
-      }
-    }, this);
-    if (!compact) art.txt(ctx, '1–' + this.choices.length + ' — быстрый выбор · Esc — пауза', 640, 652, 12, 'rgba(255,240,220,0.55)', 600, 'center');
+    if (!compact) {
+      art.txt(ctx, '1–' + n + ' — выбор · Esc — пауза', 1240, 708, 11, 'rgba(255,240,220,0.45)', 600, 'right');
+    }
     ctx.restore();
   };
   Dialogue.prototype.hitChoice = function (x, y) {
@@ -593,6 +654,7 @@
     this.t = 0;
     this.tt = 0;
     this.closeDelay = 0.6;
+    this.customer = opts.customer || null;
     this.panel = { x: 300, y: 200, w: 680, h: 360 };
     this.hard = !!opts.hard;
     this.mods = (PVZ.state && PVZ.state.mods) ? PVZ.state.mods() : {};
@@ -618,6 +680,79 @@
       }
       this.limit = 7;
       this.left = this.limit;
+    } else if (this.type === 'clean') {
+      /* Уборка — не «проведи мышью по пятну», а настоящая мини-игра:
+         сначала берём швабру (веник) со стойки, затем трём лужи (осколки)
+         и в конце отжимаем инструмент в ведро. */
+      this.tool = opts.tool === 'broom' ? 'broom' : 'mop';
+      this.stain = opts.stain || (this.tool === 'broom' ? 'shards' : 'coffee');
+      this.phase = 'take';
+      this.spots = [];
+      var spotCount = this.hard ? 5 : 4;
+      for (var ci = 0; ci < spotCount; ci++) {
+        this.spots.push({
+          x: U.rand(0.1, 0.72),
+          y: U.rand(0.14, 0.86),
+          rx: U.rand(42, 64),
+          ry: U.rand(22, 34),
+          grime: 1,
+          done: false,
+          seed: U.rand(0, 10)
+        });
+      }
+      this.limit = this.hard ? 11 : 14;
+      this.left = this.limit;
+      this.heldTool = false;
+      this.lastPX = null;
+      this.lastPY = null;
+      this.wring = 0;
+      this.toolRect = { x: this.panel.x + this.panel.w - 108, y: this.panel.y + 116, w: 82, h: 154 };
+      this.bucket = { x: this.panel.x + 48, y: this.panel.y + this.panel.h - 108, w: 86, h: 78 };
+    } else if (this.type === 'balance') {
+      /* Стопка коробок заваливается: держим её с той стороны, куда кренит. */
+      this.tilt = U.rand(-0.3, 0.3);
+      this.drift = U.rand(-0.22, 0.22);
+      this.need = this.hard ? 5.0 : 4.0;
+      this.held = 0;
+      this.support = false;
+      this.limit = 13;
+      this.left = this.limit;
+    } else if (this.type === 'wires') {
+      /* Провода: каждому штекеру — гнездо того же цвета. */
+      var wireColors = ['#e4572e', '#4a86b8', '#5aa877'];
+      this.sockets = U.shuffle(wireColors.map(function (col) { return { color: col, wired: false }; }));
+      this.plugs = wireColors.map(function (col, wi) {
+        return { color: col, y: 0.2 + wi * 0.22, wired: false };
+      });
+      this.selected = -1;
+      this.limit = this.hard ? 10 : 13;
+      this.left = this.limit;
+      this.mistakes = 0;
+    } else if (this.type === 'catch') {
+      /* С верхней полки сыпятся посылки: ловим их нажатиями. */
+      this.need = this.hard ? 6 : 5;
+      this.caught = 0;
+      this.missed = 0;
+      this.items = [];
+      this.spawnT = 0.25;
+      this.spawnEvery = this.hard ? 0.62 : 0.8;
+      this.limit = this.hard ? 11 : 13;
+      this.left = this.limit;
+    } else if (this.type === 'breakers') {
+      /* Щиток: переключаем автоматы, пока не загорится свет.
+         Нажатие переключает сам автомат и соседние — мини-головоломка. */
+      this.switchCount = this.hard ? 5 : 4;
+      this.switches = [];
+      for (var bi = 0; bi < this.switchCount; bi++) this.switches.push(true);
+      for (var press = 0; press < this.switchCount + 1; press++) {
+        this.toggleBreaker(U.ri(0, this.switchCount - 1));
+      }
+      var anyOff = false;
+      for (var bo = 0; bo < this.switches.length; bo++) if (!this.switches[bo]) anyOff = true;
+      if (!anyOff) this.toggleBreaker(0);
+      this.limit = this.hard ? 11 : 13;
+      this.left = this.limit;
+      this.flash = 0;
     } else if (this.type === 'trace') {
       this.progress = 0;
       this.need = 0.92;
@@ -714,6 +849,44 @@
     return left === 0 ? set : null;
   };
 
+  /* Геометрия мини-игры с проводами: штекеры слева, гнёзда справа. */
+  QTE.prototype.wireLayout = function () {
+    var P = this.panel;
+    var plugs = [], sockets = [];
+    for (var i = 0; i < this.plugs.length; i++) {
+      plugs.push({ x: P.x + 46, y: P.y + 108 + i * 66, w: 104, h: 46 });
+      sockets.push({ x: P.x + P.w - 150, y: P.y + 108 + i * 66, w: 104, h: 46 });
+    }
+    return { plugs: plugs, sockets: sockets };
+  };
+
+  /* Геометрия падающей посылки в мини-игре «поймать». */
+  QTE.prototype.catchRect = function (it) {
+    var P = this.panel;
+    return { x: P.x + it.x * P.w - 46, y: it.y, w: 92, h: 58, seed: it.seed };
+  };
+
+  /* Щиток: нажатие переключает автомат и его соседей. */
+  QTE.prototype.toggleBreaker = function (idx) {
+    for (var k = idx - 1; k <= idx + 1; k++) {
+      if (k >= 0 && k < this.switches.length) this.switches[k] = !this.switches[k];
+    }
+  };
+
+  QTE.prototype.breakerLayout = function () {
+    var P = this.panel;
+    var out = [];
+    var n = this.switches.length;
+    var gap = 18;
+    var w = Math.min(104, (P.w - 100 - gap * (n - 1)) / n);
+    var total = n * w + (n - 1) * gap;
+    var x0 = P.x + (P.w - total) / 2;
+    for (var i = 0; i < n; i++) {
+      out.push({ x: x0 + i * (w + gap), y: P.y + 168, w: w, h: 116 });
+    }
+    return out;
+  };
+
   QTE.prototype.finish = function (ok) {
     if (this.done) return;
     this.success = ok;
@@ -749,6 +922,102 @@
         var dx = PVZ.input.x - sx, dy = PVZ.input.y - sy;
         if (PVZ.input.down && dx * dx + dy * dy < sp.r * sp.r * 2.4) sp.done = true;
       });
+    } else if (this.type === 'clean') {
+      this.left -= dt;
+      if (this.left <= 0) { this.finish(false); return; }
+      var inp = PVZ.input;
+      var px = U.clamp(inp.x, P.x + 22, P.x + P.w - 22);
+      var py = U.clamp(inp.y, P.y + 96, P.y + P.h - 44);
+      if (this.phase === 'clean') {
+        // швабра в руке: голова ниже курсора, трём именно ею
+        var headX = px, headY = py + 28;
+        var moved = this.lastPX == null ? 0 : Math.sqrt(
+          (px - this.lastPX) * (px - this.lastPX) + (py - this.lastPY) * (py - this.lastPY)
+        );
+        if (inp.down && moved > 0.4) {
+          var rate = this.hard ? 0.0042 : 0.0056;
+          for (var si = 0; si < this.spots.length; si++) {
+            var sp = this.spots[si];
+            if (sp.done) continue;
+            var sx = P.x + 26 + sp.x * (P.w - 52);
+            var sy = P.y + 100 + sp.y * (P.h - 176);
+            var ddx = (headX - sx) / (sp.rx + 18);
+            var ddy = (headY - sy) / (sp.ry + 18);
+            if (ddx * ddx + ddy * ddy <= 1) {
+              sp.grime = Math.max(0, sp.grime - moved * rate);
+              if (sp.grime <= 0) {
+                sp.done = true;
+                PVZ.audio.beep();
+              }
+            }
+          }
+        }
+        var allDone = true;
+        for (var sj = 0; sj < this.spots.length; sj++) if (!this.spots[sj].done) allDone = false;
+        this.lastPX = px;
+        this.lastPY = py;
+        if (allDone) {
+          this.phase = 'wring';
+          this.lastPX = null;
+          PVZ.audio.level();
+        }
+      } else if (this.phase === 'wring') {
+        if (inp.down && U.hit(this.bucket, inp.x, inp.y)) {
+          this.wring = Math.min(1, this.wring + dt / 0.8);
+          if (this.wring >= 1) this.finish(true);
+        } else {
+          this.wring = Math.max(0, this.wring - dt * 2);
+        }
+      }
+    } else if (this.type === 'balance') {
+      this.left -= dt;
+      if (this.left <= 0) { this.finish(false); return; }
+      this.tilt += (this.drift + Math.sin(this.tt * 2.3) * 0.26) * dt;
+      var half = P.w / 2;
+      var ox = (PVZ.input.x - (P.x + half)) / half;
+      var leaning = this.tilt >= 0 ? 1 : -1;
+      var side = ox >= 0 ? 1 : -1;
+      this.support = PVZ.input.down && Math.abs(ox) > 0.12 &&
+        side === leaning && Math.abs(ox) > Math.abs(this.tilt) * 0.45;
+      if (this.support) {
+        this.tilt -= this.tilt * Math.min(1, dt * 2.9);
+        if (Math.abs(this.tilt) < 0.9) this.held += dt;
+      } else {
+        this.held = Math.max(0, this.held - dt * 0.7);
+      }
+      if (Math.abs(this.tilt) > 1.05) { this.finish(false); return; }
+      if (this.held >= this.need) this.finish(true);
+    } else if (this.type === 'wires') {
+      this.left -= dt;
+      if (this.left <= 0) this.finish(false);
+    } else if (this.type === 'catch') {
+      this.left -= dt;
+      if (this.left <= 0) { this.finish(false); return; }
+      this.spawnT -= dt;
+      if (this.spawnT <= 0 && this.items.length < 4) {
+        this.spawnT = this.spawnEvery * U.rand(0.8, 1.2);
+        this.items.push({
+          x: U.rand(0.16, 0.84),
+          y: P.y + 112,
+          vy: U.rand(125, 175) * (this.hard ? 1.2 : 1),
+          seed: U.ri(0, 5),
+          wob: U.rand(0, 6.28)
+        });
+      }
+      for (var ii = this.items.length - 1; ii >= 0; ii--) {
+        var it = this.items[ii];
+        it.y += it.vy * dt;
+        if (it.y > P.y + P.h - 94) {
+          this.items.splice(ii, 1);
+          this.missed++;
+          PVZ.audio.bad();
+          if (this.missed >= 3) { this.finish(false); return; }
+        }
+      }
+    } else if (this.type === 'breakers') {
+      this.left -= dt;
+      if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 3);
+      if (this.left <= 0) this.finish(false);
     } else if (this.type === 'trace') {
       this.left -= dt;
       if (this.left <= 0) { this.finish(false); return; }
@@ -821,6 +1090,67 @@
       this.taps++;
       PVZ.audio.tap();
       if (this.taps >= this.need) this.finish(true);
+    } else if (this.type === 'clean') {
+      if (this.phase === 'take' && U.hit(this.toolRect, x, y)) {
+        this.phase = 'clean';
+        this.heldTool = true;
+        PVZ.audio.tap();
+      }
+    } else if (this.type === 'balance') {
+      // удержание стопки — это зажатый курсор, тап здесь не нужен
+    } else if (this.type === 'wires') {
+      var lay = this.wireLayout();
+      for (var pi = 0; pi < this.plugs.length; pi++) {
+        if (this.plugs[pi].wired || !U.hit(lay.plugs[pi], x, y)) continue;
+        this.selected = this.selected === pi ? -1 : pi;
+        PVZ.audio.tap();
+        return;
+      }
+      if (this.selected < 0) return;
+      for (var so = 0; so < this.sockets.length; so++) {
+        if (!U.hit(lay.sockets[so], x, y)) continue;
+        var plug = this.plugs[this.selected];
+        var sock = this.sockets[so];
+        if (!sock.wired && sock.color === plug.color) {
+          sock.wired = true;
+          plug.wired = true;
+          this.selected = -1;
+          PVZ.audio.beep();
+          var allWired = true;
+          for (var wi = 0; wi < this.plugs.length; wi++) if (!this.plugs[wi].wired) allWired = false;
+          if (allWired) this.finish(true);
+        } else {
+          this.mistakes++;
+          this.left = Math.max(0.5, this.left - 2);
+          PVZ.audio.bad();
+          this.selected = -1;
+          if (this.mistakes >= 4) this.finish(false);
+        }
+        return;
+      }
+    } else if (this.type === 'catch') {
+      for (var ci2 = this.items.length - 1; ci2 >= 0; ci2--) {
+        var item = this.items[ci2];
+        var cr = this.catchRect(item);
+        if (!U.hit(cr, x, y)) continue;
+        this.items.splice(ci2, 1);
+        this.caught++;
+        PVZ.audio.cash();
+        if (this.caught >= this.need) this.finish(true);
+        return;
+      }
+    } else if (this.type === 'breakers') {
+      var bl = this.breakerLayout();
+      for (var bk2 = 0; bk2 < bl.length; bk2++) {
+        if (!U.hit(bl[bk2], x, y)) continue;
+        this.toggleBreaker(bk2);
+        this.flash = 1;
+        PVZ.audio.tap();
+        var allOn = true;
+        for (var bs = 0; bs < this.switches.length; bs++) if (!this.switches[bs]) allOn = false;
+        if (allOn) this.finish(true);
+        return;
+      }
     } else if (this.type === 'cashier') {
       var cw = (P.w - 80) / 3;
       for (var i = 0; i < this.options.length; i++) {
@@ -911,6 +1241,18 @@
     art.txt(ctx, this.title, P.x + P.w / 2, P.y + 46, 25, '#ffc27a', 800, 'center');
     if (this.sub) art.txt(ctx, this.sub, P.x + P.w / 2, P.y + 74, 14, 'rgba(255,235,215,0.7)', 600, 'center');
 
+    /* Мини-игра идёт — терпение покупателя тоже идёт. Показываем это прямо
+       над панелью, чтобы игрок не удивлялся ушедшему клиенту. */
+    if (this.customer) {
+      var waiting = this.customer;
+      var gone = waiting.state === 'leaving';
+      art.txt(ctx, gone ? 'Покупатель ушёл' : 'Терпение покупателя', P.x + P.w - 12, P.y - 18, 11,
+        gone ? '#ff8a5c' : 'rgba(255,240,220,0.6)', 700, 'right');
+      art.bar(ctx, P.x + P.w - 192, P.y - 12, 180, 6,
+        gone ? 0 : U.clamp(waiting.patience, 0, 1),
+        gone ? '#ff8a5c' : waiting.patience > 0.55 ? '#5aa877' : waiting.patience > 0.3 ? '#f2c14a' : '#e4572e');
+    }
+
     if (this.type === 'scan') {
       var sx = P.x + 54, sw = P.w - 108, sy = P.y + 104, sh = 140;
       art.fillRR(ctx, sx - 8, sy - 8, sw + 16, sh + 16, 8, '#fdfaf3');
@@ -996,6 +1338,263 @@
       });
       art.txt(ctx, 'Проведите зажатой мышью/пальцем по пятнам', P.x + P.w / 2, P.y + P.h - 26, 15, 'rgba(255,240,220,0.8)', 600, 'center');
       art.bar(ctx, P.x + 60, P.y + 86, P.w - 120, 8, this.left / this.limit, '#e4572e');
+    } else if (this.type === 'clean') {
+      var floor = { x: P.x + 24, y: P.y + 94, w: P.w - 48, h: P.h - 126 };
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(floor.x, floor.y, floor.w, floor.h);
+      ctx.clip();
+      ctx.fillStyle = 'rgba(64,46,35,0.6)';
+      ctx.fillRect(floor.x, floor.y, floor.w, floor.h);
+      for (var fgx = floor.x; fgx <= floor.x + floor.w; fgx += 64) {
+        ctx.strokeStyle = 'rgba(255,235,210,0.055)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(fgx, floor.y); ctx.lineTo(fgx, floor.y + floor.h); ctx.stroke();
+      }
+      for (var fgy = floor.y; fgy <= floor.y + floor.h; fgy += 52) {
+        ctx.strokeStyle = 'rgba(255,235,210,0.045)';
+        ctx.beginPath(); ctx.moveTo(floor.x, fgy); ctx.lineTo(floor.x + floor.w, fgy); ctx.stroke();
+      }
+      for (var s2 = 0; s2 < this.spots.length; s2++) {
+        var sp2 = this.spots[s2];
+        if (sp2.done) continue;
+        var spx = P.x + 26 + sp2.x * (P.w - 52);
+        var spy = P.y + 100 + sp2.y * (P.h - 176);
+        ctx.save();
+        ctx.globalAlpha = 0.35 + sp2.grime * 0.55;
+        if (this.stain === 'coffee') {
+          for (var blob = 0; blob < 7; blob++) {
+            var ang2 = sp2.seed + blob * 1.73;
+            var bbx = spx + Math.cos(ang2) * sp2.rx * 0.42;
+            var bby = spy + Math.sin(ang2 * 1.3) * sp2.ry * 0.5;
+            var bbr = 10 + (blob % 3) * 5 + sp2.grime * 8;
+            ctx.beginPath();
+            ctx.arc(bbx, bby, bbr, 0, Math.PI * 2);
+            ctx.fillStyle = blob % 2 ? '#5b3d27' : '#6d4b30';
+            ctx.fill();
+          }
+          ctx.beginPath();
+          ctx.ellipse(spx, spy, sp2.rx, sp2.ry, 0, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(62,41,26,0.72)';
+          ctx.fill();
+        } else {
+          for (var sh = 0; sh < 6; sh++) {
+            var sax = spx + Math.cos(sp2.seed + sh * 1.9) * sp2.rx * 0.7;
+            var say = spy + Math.sin(sp2.seed * 1.4 + sh * 2.3) * sp2.ry * 0.8;
+            ctx.beginPath();
+            ctx.moveTo(sax - 7, say + 5);
+            ctx.lineTo(sax + 8, say - 4);
+            ctx.lineTo(sax + 2, say + 7);
+            ctx.closePath();
+            ctx.fillStyle = sh % 2 ? 'rgba(190,225,230,0.92)' : 'rgba(150,200,215,0.85)';
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+      ctx.restore();
+      // ведро и инструмент
+      var bk = this.bucket;
+      art.fillRR(ctx, bk.x, bk.y + 16, bk.w, bk.h - 16, 10, 'rgba(50,74,84,0.95)');
+      art.strokeRR(ctx, bk.x, bk.y + 16, bk.w, bk.h - 16, 10, 'rgba(170,210,220,0.55)', 2);
+      ctx.beginPath();
+      ctx.ellipse(bk.x + bk.w / 2, bk.y + 22, bk.w / 2 - 7, 10, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(90,140,155,0.85)';
+      ctx.fill();
+      art.txt(ctx, this.tool === 'broom' ? 'СОВОК' : 'ВЕДРО', bk.x + bk.w / 2, bk.y + bk.h - 10, 10, 'rgba(235,250,255,0.6)', 700, 'center');
+      if (this.phase === 'wring') {
+        art.glowRect(ctx, bk, this.tt, '#9df0bb');
+        art.bar(ctx, bk.x, bk.y - 12, bk.w, 7, this.wring, '#7fe0a0');
+      }
+      var selfQ = this;
+      var mopDraw = function (hx2, hy2, alpha2) {
+        ctx.save();
+        ctx.globalAlpha *= alpha2 == null ? 1 : alpha2;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#8a5a34';
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        ctx.moveTo(hx2, hy2);
+        ctx.lineTo(hx2 + 36, hy2 - 118);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,220,180,0.25)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(hx2 + 3, hy2 - 2);
+        ctx.lineTo(hx2 + 39, hy2 - 120);
+        ctx.stroke();
+        if (selfQ.tool === 'broom') {
+          art.fillRR(ctx, hx2 - 30, hy2 - 4, 60, 16, 6, '#b98a4d');
+          ctx.strokeStyle = '#d8b072';
+          ctx.lineWidth = 3;
+          for (var br3 = -24; br3 <= 24; br3 += 8) {
+            ctx.beginPath();
+            ctx.moveTo(hx2 + br3, hy2 + 10);
+            ctx.lineTo(hx2 + br3 * 1.25, hy2 + 30);
+            ctx.stroke();
+          }
+        } else {
+          art.fillRR(ctx, hx2 - 24, hy2 - 3, 48, 15, 6, '#d8c3a4');
+          ctx.strokeStyle = 'rgba(240,225,195,0.8)';
+          ctx.lineWidth = 2.5;
+          for (var mr = -18; mr <= 18; mr += 6) {
+            ctx.beginPath();
+            ctx.moveTo(hx2 + mr, hy2 + 10);
+            ctx.lineTo(hx2 + mr * 1.12, hy2 + 26);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      };
+      if (this.phase === 'take' && !this.heldTool) {
+        art.glowRect(ctx, this.toolRect, this.tt);
+        mopDraw(this.toolRect.x + this.toolRect.w / 2, this.toolRect.y + this.toolRect.h - 18, 1);
+        art.txt(ctx, this.tool === 'broom' ? 'ВЕНИК' : 'ШВАБРА', this.toolRect.x + this.toolRect.w / 2, this.toolRect.y - 8, 11, '#ffd8a8', 700, 'center');
+      } else if (this.phase === 'clean') {
+        mopDraw(U.clamp(PVZ.input.x, P.x + 22, P.x + P.w - 22),
+          U.clamp(PVZ.input.y, P.y + 96, P.y + P.h - 44) + 28, 1);
+      }
+      var cleanSum = 0;
+      for (var csi = 0; csi < this.spots.length; csi++) cleanSum += 1 - this.spots[csi].grime;
+      art.bar(ctx, P.x + 40, P.y + 86, P.w - 80, 8, cleanSum / this.spots.length, '#5aa877');
+      art.bar(ctx, P.x + 60, P.y + P.h - 34, P.w - 120, 8, this.left / this.limit, '#e4572e');
+      var cleanHint = this.phase === 'take'
+        ? (this.tool === 'broom' ? 'Сначала возьмите веник справа' : 'Сначала возьмите швабру справа')
+        : this.phase === 'wring'
+          ? (this.tool === 'broom' ? 'Мусор собран! Стряхните его в ведро: зажмите внутри' : 'Пятна стёрты! Отожмите швабру в ведре: зажмите внутри')
+          : (this.tool === 'broom' ? 'Зажмите мышь и заметайте осколки в совок' : 'Зажмите мышь и протрите лужи шваброй');
+      art.txt(ctx, cleanHint, P.x + P.w / 2, P.y + P.h - 18, 13, 'rgba(255,240,220,0.82)', 600, 'center');
+    } else if (this.type === 'balance') {
+      var bcx = P.x + P.w / 2, bbase = P.y + P.h - 96;
+      ctx.save();
+      ctx.fillStyle = this.support ? 'rgba(120,230,160,0.16)' : 'rgba(242,153,74,0.07)';
+      ctx.fillRect(P.x + 36, P.y + 96, P.w - 72, P.h - 166);
+      ctx.restore();
+      if (this.tilt < -0.08) art.txt(ctx, '← ПРИДЕРЖИТЕ', P.x + 64, P.y + 130, 15, this.support ? '#9df0bb' : '#ffd8a8', 800, 'left');
+      if (this.tilt > 0.08) art.txt(ctx, 'ПРИДЕРЖИТЕ →', P.x + P.w - 64, P.y + 130, 15, this.support ? '#9df0bb' : '#ffd8a8', 800, 'right');
+      ctx.save();
+      ctx.translate(bcx, bbase);
+      ctx.rotate(this.tilt * 0.34);
+      for (var bxi = 0; bxi < 4; bxi++) {
+        var bby2 = -bxi * 45 - 44;
+        art.fillRR(ctx, -78, bby2, 156, 42, 6, bxi % 2 ? '#c9a26a' : '#d4af77');
+        art.strokeRR(ctx, -78, bby2, 156, 42, 6, 'rgba(90,60,35,0.55)', 1.5);
+        ctx.fillStyle = 'rgba(230,211,168,0.75)';
+        ctx.fillRect(-4, bby2, 8, 42);
+        art.txt(ctx, 'ХРУПКОЕ', 0, bby2 + 26, 9, 'rgba(90,60,35,0.55)', 700, 'center');
+      }
+      ctx.restore();
+      // руки-опоры с наклонённой стороны
+      var handSide = this.tilt >= 0 ? 1 : -1;
+      var handX = bcx + handSide * 96;
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      art.fillRR(ctx, handX - 16, bbase - 104, 32, 54, 12, this.support ? '#9df0bb' : 'rgba(242,153,74,0.7)');
+      ctx.restore();
+      art.bar(ctx, P.x + 60, P.y + P.h - 52, P.w - 120, 12, this.held / this.need, '#5aa877');
+      art.txt(ctx, 'Держим: ' + this.held.toFixed(1) + ' / ' + this.need.toFixed(1) + ' с', P.x + P.w / 2, P.y + P.h - 20, 13, 'rgba(255,240,220,0.8)', 600, 'center');
+      art.bar(ctx, P.x + 60, P.y + 86, P.w - 120, 8, this.left / this.limit, '#e4572e');
+    } else if (this.type === 'wires') {
+      var lay2 = this.wireLayout();
+      for (var wi2 = 0; wi2 < this.plugs.length; wi2++) {
+        var pl = this.plugs[wi2];
+        var pr = lay2.plugs[wi2];
+        var sockIdx = -1;
+        for (var sk = 0; sk < this.sockets.length; sk++) if (this.sockets[sk].color === pl.color) sockIdx = sk;
+        ctx.save();
+        ctx.strokeStyle = pl.color;
+        ctx.lineWidth = 5;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.moveTo(pr.x + pr.w, pr.y + pr.h / 2);
+        if (pl.wired && sockIdx >= 0) {
+          var sr = lay2.sockets[sockIdx];
+          ctx.bezierCurveTo(pr.x + pr.w + 80, pr.y + 8, sr.x - 80, sr.y + 38, sr.x, sr.y + sr.h / 2);
+        } else {
+          ctx.bezierCurveTo(pr.x + pr.w + 60, pr.y + 74, pr.x + pr.w + 130, pr.y + 26, pr.x + pr.w + 148, pr.y + 92);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+      for (var wj = 0; wj < this.plugs.length; wj++) {
+        var pR = lay2.plugs[wj];
+        var plu = this.plugs[wj];
+        var sel = this.selected === wj;
+        art.fillRR(ctx, pR.x, pR.y, pR.w, pR.h, 9, sel ? 'rgba(242,153,74,0.95)' : 'rgba(255,255,255,0.08)');
+        art.strokeRR(ctx, pR.x, pR.y, pR.w, pR.h, 9, sel ? '#ffdcb0' : 'rgba(255,235,210,0.22)', 1.5);
+        ctx.beginPath();
+        ctx.arc(pR.x + 22, pR.y + pR.h / 2, 10, 0, Math.PI * 2);
+        ctx.fillStyle = plu.color;
+        ctx.fill();
+        art.txt(ctx, plu.wired ? 'подключён' : (sel ? 'выбран' : 'штекер'), pR.x + 42, pR.y + 29, 12,
+          sel ? '#2a1a10' : 'rgba(255,240,220,0.78)', 700);
+      }
+      for (var ws = 0; ws < this.sockets.length; ws++) {
+        var sR = lay2.sockets[ws];
+        var soc = this.sockets[ws];
+        art.fillRR(ctx, sR.x, sR.y, sR.w, sR.h, 9, soc.wired ? 'rgba(120,230,160,0.2)' : 'rgba(0,0,0,0.3)');
+        art.strokeRR(ctx, sR.x, sR.y, sR.w, sR.h, 9, 'rgba(255,235,210,0.22)', 1.5);
+        art.fillRR(ctx, sR.x + 10, sR.y + 15, 12, sR.h - 30, 4, soc.wired ? '#7fe0a0' : 'rgba(255,255,255,0.18)');
+        ctx.beginPath();
+        ctx.arc(sR.x + sR.w - 22, sR.y + sR.h / 2, 10, 0, Math.PI * 2);
+        ctx.fillStyle = soc.color;
+        ctx.fill();
+        art.txt(ctx, 'гнездо', sR.x + sR.w - 46, sR.y + 29, 12, 'rgba(255,240,220,0.78)', 700, 'right');
+      }
+      var wiredCount = 0;
+      for (var wc = 0; wc < this.plugs.length; wc++) if (this.plugs[wc].wired) wiredCount++;
+      art.bar(ctx, P.x + 60, P.y + P.h - 46, P.w - 120, 8, wiredCount / this.plugs.length, '#5aa877');
+      art.txt(ctx, 'Соединено ' + wiredCount + ' / ' + this.plugs.length + ' · нажмите штекер, затем гнездо того же цвета',
+        P.x + P.w / 2, P.y + P.h - 16, 13, 'rgba(255,240,220,0.8)', 600, 'center');
+    } else if (this.type === 'catch') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(P.x + 40, P.y + 104, P.w - 80, P.h - 192);
+      art.fillRR(ctx, P.x + 32, P.y + 98, P.w - 64, 10, 4, '#7d4f2a');
+      art.fillRR(ctx, P.x + 32, P.y + P.h - 86, P.w - 64, 10, 4, 'rgba(255,235,210,0.22)');
+      ctx.restore();
+      var self2 = this;
+      this.items.forEach(function (it2) {
+        var cr2 = self2.catchRect(it2);
+        art.drawParcel(ctx, cr2.x, cr2.y, cr2.w, cr2.h, { code: '—', seed: it2.seed });
+      });
+      art.bar(ctx, P.x + 60, P.y + 88, P.w - 120, 7, this.left / this.limit, '#e4572e');
+      art.txt(ctx, 'Поймано ' + this.caught + ' / ' + this.need + ' · разбито ' + this.missed + ' / 3',
+        P.x + P.w / 2, P.y + P.h - 38, 15, this.missed >= 2 ? '#ff8a5c' : '#ffd8a8', 800, 'center');
+      art.txt(ctx, 'Нажимайте на падающие посылки, пока они не упали на пол', P.x + P.w / 2, P.y + P.h - 16, 13, 'rgba(255,240,220,0.8)', 600, 'center');
+    } else if (this.type === 'breakers') {
+      var bl2 = this.breakerLayout();
+      art.fillRR(ctx, P.x + 60, P.y + 108, P.w - 120, 236, 14, 'rgba(28,36,40,0.95)');
+      art.strokeRR(ctx, P.x + 60, P.y + 108, P.w - 120, 236, 14, 'rgba(160,210,225,0.28)', 2);
+      art.txt(ctx, 'ЭЛЕКТРОЩИТОК', P.x + P.w / 2, P.y + 134, 13, 'rgba(190,235,245,0.65)', 800, 'center');
+      var onCount = 0;
+      for (var bd = 0; bd < bl2.length; bd++) {
+        var br4 = bl2[bd];
+        var on = this.switches[bd];
+        if (on) onCount++;
+        art.fillRR(ctx, br4.x, br4.y, br4.w, br4.h, 9, this.flash > 0 ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.28)');
+        art.strokeRR(ctx, br4.x, br4.y, br4.w, br4.h, 9, on ? 'rgba(140,240,180,0.75)' : 'rgba(255,235,210,0.2)', 1.5);
+        // корпус автомата
+        art.fillRR(ctx, br4.x + 14, br4.y + 18, br4.w - 28, 20, 4, 'rgba(220,225,220,0.9)');
+        art.fillRR(ctx, br4.x + 14, br4.y + 38, br4.w - 28, 34, 4, 'rgba(245,242,232,0.95)');
+        // рычаг: вверх — включено, вниз — выключено
+        ctx.save();
+        ctx.translate(br4.x + br4.w / 2, br4.y + 50);
+        ctx.rotate(on ? -0.32 : 0.32);
+        art.fillRR(ctx, -7, -22, 14, 44, 6, '#3b4a50');
+        art.fillRR(ctx, -9, -26, 18, 12, 5, on ? '#7fe0a0' : '#e4572e');
+        ctx.restore();
+        art.txt(ctx, 'АВТОМАТ ' + (bd + 1), br4.x + br4.w / 2, br4.y + 94, 10,
+          on ? '#9df0bb' : 'rgba(255,200,170,0.7)', 700, 'center');
+        ctx.beginPath();
+        ctx.arc(br4.x + br4.w / 2, br4.y + 110, 4, 0, Math.PI * 2);
+        ctx.fillStyle = on ? '#7fe0a0' : 'rgba(255,255,255,0.18)';
+        ctx.fill();
+      }
+      art.txt(ctx, 'Автоматов включено: ' + onCount + ' / ' + bl2.length, P.x + P.w / 2, P.y + 300, 14, '#ffd8a8', 700, 'center');
+      art.bar(ctx, P.x + 60, P.y + 316, P.w - 120, 8, onCount / bl2.length, '#5aa877');
+      art.bar(ctx, P.x + 60, P.y + 88, P.w - 120, 7, this.left / this.limit, '#e4572e');
+      art.txt(ctx, 'Нажимайте на автоматы: переключается сам и соседние. Зажгите все.', P.x + P.w / 2, P.y + P.h - 18, 13, 'rgba(255,240,220,0.82)', 600, 'center');
     } else if (this.type === 'trace') {
       var x0 = P.x + 40, x1 = P.x + P.w - 40;
       // дорожка
@@ -1309,9 +1908,21 @@
   /* Куратор, ящик «мимо кассы», рейд, предложение работать на них и сделка
      с участковым. Каждая сцена даёт доверие, грязь или улику — из этой
      троицы к финалу складывается один из пяти концов. */
-  var KOSTYA = { skin: 2, hair: '#3a2a1e', style: 'short', shirt: '#4b5a66', pants: '#2a2f36', coat: '#34424c', expr: 'neutral' };
-  var GOON = { skin: 3, hair: '#15110e', style: 'short', shirt: '#24242e', pants: '#1b1b21', coat: '#181820', beard: true, expr: 'angry' };
-  var BOSS = { skin: 1, hair: '#161412', style: 'short', shirt: '#1b1b22', pants: '#141418', coat: '#101014', beard: true, expr: 'angry', glasses: true };
+  var KOSTYA = {
+    skin: 2, hair: '#2e2119', style: 'short', shirt: '#d9d3c6', pants: '#22262c',
+    coat: '#2b3340', tie: '#3a2028', expr: 'neutral', build: 1.06, headScale: 0.96
+  };
+  var GOON = {
+    skin: 3, hair: '#131110', style: 'bald', shirt: '#22222a', pants: '#17171c',
+    coat: '#1e1e26', beard: true, shades: true, scar: true, stubble: true, evil: true,
+    expr: 'snarl', build: 1.42, headScale: 0.8
+  };
+  var BOSS = {
+    skin: 1, hair: '#161412', style: 'short', shirt: '#f1e8d9', pants: '#191920',
+    coat: '#8e2440', hat: 'fedora', hatColor: '#8e2440', tie: '#141014',
+    stubble: true, scar: true, cigar: true, evil: true,
+    expr: 'angry', build: 1.3, headScale: 0.92
+  };
   var COP = { skin: 1, hair: '#2a2420', style: 'short', shirt: '#3c5a7a', pants: '#22303f', coat: '#2a3a4a', expr: 'neutral' };
 
   sys.MAFIA_STORIES = [

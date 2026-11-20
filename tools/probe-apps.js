@@ -54,7 +54,7 @@ global.addEventListener = noop;
 global.removeEventListener = noop;
 global.URLSearchParams = URLSearchParams;
 
-for (const f of ['core.js', 'art.js', 'systems.js', 'apps.js', 'scenes.js', 'main.js']) {
+for (const f of ['core.js', 'music.js', 'art.js', 'systems.js', 'apps.js', 'scenes.js', 'main.js']) {
   try {
     vm.runInThisContext(fs.readFileSync(path.join(ROOT, 'src', f), 'utf8'), { filename: f });
   } catch (e) {
@@ -275,7 +275,7 @@ try {
   mafia.onTap(640, 300);
   mafia.exit();
   ok(PVZ.music.mood === 'calm', 'после визита тема сбрасывается');
-  ok(PVZ.music.playCalmStep && PVZ.music.playScaryStep, 'обе музыкальные темы определены');
+  ok(PVZ.music.playBar && PVZ.music.THEMES.mafia, 'обе музыкальные темы определены');
 
   // сохранение приложений
   PVZ.state.save();

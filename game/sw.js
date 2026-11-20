@@ -1,7 +1,7 @@
 /* Офлайн-кэш браузерной версии «ПВЗ: Смена».
    Регистрируется только по https (GitHub Pages), поэтому file:// и APK
    работают без service worker. При выпуске новой версии меняйте CACHE. */
-const CACHE = 'pvz-smena-1.6.1';
+const CACHE = 'pvz-smena-2.1.0';
 const ASSETS = [
   './',
   './index.html',
@@ -11,9 +11,14 @@ const ASSETS = [
   './icon-512.png',
   './icon-1024.png',
   './src/core.js',
+  './src/music.js',
   './src/pay.js',
   './src/art.js',
   './src/systems.js',
+  './src/talks.js',
+  './src/cast.js',
+  './src/serve.js',
+  './src/boxes.js',
   './src/apps.js',
   './src/scenes.js',
   './src/main.js'

@@ -100,6 +100,15 @@ fs.rmSync(PC, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 fs.cpSync(path.join(ROOT, 'game'), path.join(outDir, 'game'), { recursive: true });
 fs.cpSync(path.join(ROOT, 'assets'), path.join(outDir, 'assets'), { recursive: true });
+
+/* PC-сборка тоже релизная: без DEV, ?dev= и демо-оплаты */
+const pcEntry = path.join(outDir, 'game', 'index.html');
+let pcHtml = fs.readFileSync(pcEntry, 'utf8');
+if (!pcHtml.includes('window.PVZ_RELEASE')) {
+  pcHtml = pcHtml.replace('<head>', '<head>\n<script>window.PVZ_RELEASE = true;</script>');
+  fs.writeFileSync(pcEntry, pcHtml);
+}
+
 writeUtf16(path.join(outDir, 'Запустить ПВЗ.vbs'), VBS);
 fs.writeFileSync(path.join(outDir, 'Запустить ПВЗ.cmd'), CMD, 'utf8');
 writeUtf8Bom(path.join(outDir, 'README.txt'), README);

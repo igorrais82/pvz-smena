@@ -24,11 +24,10 @@ dist/PVZ-Smena-<версия>.apk
 - Включены `javaScriptEnabled`, `domStorageEnabled` (сохранение прогресса в `localStorage`), `mediaPlaybackRequiresUserGesture = false` (музыка синтезируется и стартует по тапу).
 - Системная кнопка «Назад» пробрасывается в игру: `window.PVZ.game.onAndroidBack()` возвращает `resume` / `paused` / `exit`; на `exit` Activity закрывается.
 - Игра не ходит в сеть: из разрешений только вибрация.
+- Мост в игру: `window.PVZNative` (`PvzBridge.java`) — реклама, платежи, вибрация.
+- Минимальная версия — **Android 8.0 (minSdk 26)**, как требует RuStore.
 
-Перед публикацией в RuStore/Google Play уберите отладочные точки входа:
-
-- кнопка `DEV ⚙` и меню читов в `game/src/scenes.js` (функции `drawDev`, `handleDevTap`, объект `api.debug`);
-- `applyDevQuery()` в `game/src/main.js` (входы `?dev=…`) — или оставьте только для внутренних сборок.
+Отладочные точки входа (`DEV`, `?dev=…`, демо-оплата) в релизных сборках выключены автоматически: `tools/build.js` ставит `window.PVZ_RELEASE = true`. Платежи и реклама подключаются через `PVZNative` — инструкция в [../RELEASE-RUSTORE.md](../RELEASE-RUSTORE.md).
 
 ## Подпись и обновления
 

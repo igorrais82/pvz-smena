@@ -10,10 +10,10 @@ android {
 
     defaultConfig {
         applicationId = "ru.igorrais82.pvz"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 35
-        versionCode = 10601
-        versionName = "1.6.1"
+        versionCode = 20100
+        versionName = "2.1.0"
     }
 
     val keystoreProps = rootProject.file("keystore.properties")

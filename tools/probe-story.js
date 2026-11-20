@@ -52,7 +52,7 @@ global.addEventListener = noop;
 global.removeEventListener = noop;
 global.URLSearchParams = URLSearchParams;
 
-for (const f of ['core.js', 'art.js', 'systems.js', 'scenes.js', 'main.js']) {
+for (const f of ['core.js', 'music.js', 'art.js', 'systems.js', 'talks.js', 'cast.js', 'boxes.js', 'apps.js', 'scenes.js', 'main.js']) {
   try { vm.runInThisContext(fs.readFileSync(path.join(ROOT, 'src', f), 'utf8'), { filename: f }); }
   catch (e) { errors.push('load ' + f + ': ' + e.message); }
 }

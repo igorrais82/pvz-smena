@@ -133,9 +133,13 @@
     },
     {
       id: 'chat', name: 'Мессенджер', short: 'Чат', glyph: '✉', color: '#5b7fd0',
-      cat: 'fun', price: 0, size: '11 МБ', rating: 4.2,
-      desc: 'Переписка с Артёмом из соседнего пункта.',
-      info: ['Чат с Артёмом.']
+      cat: 'fun', price: 0, size: '12 МБ', rating: 4.5, builtin: true,
+      desc: 'Живая переписка: знакомые из пункта и рабочие чаты.',
+      info: [
+        'Мессенджер стоит на ноутбуке сразу.',
+        'Сюжетные собеседники пишут почти каждый день: у каждого своя линия.',
+        'Выбирайте варианты ответа — от них зависит отношение, деньги и сюжет.'
+      ]
     },
     {
       id: 'radio', name: 'Радио ПВЗ', short: 'Радио', glyph: '♪', color: '#b05a8a',
@@ -218,7 +222,11 @@
     apps.CATALOG.forEach(function (a) { order.push(a.id); });
     var installed = (PVZ.state.data.apps || []).slice();
     installed.sort(function (a, b) { return order.indexOf(a) - order.indexOf(b); });
-    return installed.map(apps.byId).filter(Boolean);
+    return installed.map(apps.byId).filter(function (a) {
+      // Premium store без платежей и рекламы не показываем вовсе
+      if (a && a.id === 'premium') return apps.premiumAvailable();
+      return !!a;
+    });
   };
 
   /* ---------------- мелкие помощники для экранов ---------------- */
@@ -864,7 +872,7 @@
   apps.RADIO = [
     { id: 'off', name: 'Тишина', desc: 'радио выключено', gain: 0.15, track: -1, color: '#7a7a7a' },
     { id: 'lofi', name: 'Lo-Fi', desc: 'тихий спокойный фон', gain: 0.7, track: 0, color: '#8fa2c9' },
-    { id: 'pvz', name: 'Радио ПВЗ', desc: 'обычная громкость', gain: 1, track: 1, color: '#f2994a' },
+    { id: 'pvz', name: 'Радио ПВЗ', desc: 'музыка смены: утро, день, вечер', gain: 1, track: 1, color: '#f2994a' },
     { id: 'night', name: 'Ночной эфир', desc: 'синтвейв и неон', gain: 1.15, track: 2, color: '#b05ad0' },
     { id: 'jazz', name: 'Джаз-кафе', desc: 'тёплый ламповый джаз', gain: 0.9, track: 3, color: '#c9a227' },
     { id: 'chip', name: '8-бит смена', desc: 'быстрый чиптюн', gain: 0.85, track: 4, color: '#6fbf73' },
@@ -1041,13 +1049,14 @@
     var tips = [
       'T — терминал, L — ноутбук, Esc — пауза.',
       'Сканер сначала взять со стола.',
-      'Посылка: взять → на стол → сканер → клиент.',
-      'Отзывы отвечать в ноутбуке → Отзывы.'
+      'Посылка: взять → на стол → сканер → вскрыть → клиент.',
+      'Поболтать с клиентом — вариант в диалоге.',
+      'L → Мессенджер: каждый день новые сообщения.'
     ];
-    tips.slice(0, 4).forEach(function (line, i) {
+    tips.slice(0, 5).forEach(function (line, i) {
       var lines = U.wrapLines(ctx, line, right.w - 40, 10.5, 600);
       lines.slice(0, 2).forEach(function (t, li) {
-        art.txt(ctx, t, right.x + 20, right.y + 54 + i * 32 + li * 13, 10.5, 'rgba(90,60,20,0.8)', 600);
+        art.txt(ctx, t, right.x + 20, right.y + 54 + i * 28 + li * 13, 10.5, 'rgba(90,60,20,0.8)', 600);
       });
     });
     // след кота
@@ -1459,103 +1468,164 @@
   }
 
   /* ---------------- мессенджер ---------------- */
-  var CHAT_CONTACTS = [
-    { id: 'artem', name: 'Артём', note: 'друг, соседний ПВЗ', color: '#4a86b8' },
-    { id: 'mom', name: 'Мама', note: 'просто позвонить', color: '#d0577f' },
-    { id: 'support', name: 'Поддержка ПВЗ', note: 'помощь по смене', color: '#3f9c6a' }
-  ];
-  apps.CHAT_CONTACTS = CHAT_CONTACTS;
-  apps.chatRects = function (win) {
+  /* Содержание переписок живёт в talks.js: здесь только экран и клики. */
+  function chatContacts() {
+    return (PVZ.talks && PVZ.talks.contacts) ? PVZ.talks.contacts() : [];
+  }
+  apps.chatContacts = chatContacts;
+  /* старое имя оставлено для совместимости с инструментами */
+  apps.CHAT_CONTACTS = chatContacts();
+
+  function chatWith(env) {
+    var list = chatContacts();
+    var id = (env && env.laptop && env.laptop.chatWith) || 'artem';
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return id;
+    return list.length ? list[0].id : 'artem';
+  }
+
+  function chatLayout(win, withId) {
     var b = screenBox(win);
-    var left = { x: b.x, y: b.y, w: 220, h: b.h };
-    var rows = CHAT_CONTACTS.map(function (c, i) { return { x: left.x, y: left.y + 26 + i * 48, w: left.w, h: 42, id: c.id }; });
-    var qy = b.y + b.h - 40;
-    var quick = [
-      { x: b.x + 246, y: qy, w: 138, h: 30, text: 'Привет!' },
-      { x: b.x + 392, y: qy, w: 162, h: 30, text: 'Как дела?' },
-      { x: b.x + 562, y: qy, w: 138, h: 30, text: 'Держись.' }
-    ];
-    return { left: left, rows: rows, quick: quick, right: { x: b.x + 232, y: b.y, w: b.w - 232, h: b.h } };
-  };
+    var left = { x: b.x, y: b.y, w: 228, h: b.h };
+    var contacts = chatContacts();
+    // контактов может стать много (постоянные покупатели дают номера):
+    // сжимаем строки, чтобы список целиком помещался в левую колонку
+    var rowsAvail = Math.max(120, b.h - 32);
+    var rowH = Math.min(47, Math.max(22, Math.floor(rowsAvail / Math.max(1, contacts.length))));
+    var rows = contacts.map(function (c, i) {
+      return { x: left.x, y: left.y + 26 + i * rowH, w: left.w, h: Math.max(18, rowH - 4), id: c.id };
+    });
+    var right = { x: b.x + 240, y: b.y, w: b.w - 240, h: b.h };
+    var d = PVZ.state.data || {};
+    var replies = (PVZ.talks && PVZ.talks.repliesFor) ? PVZ.talks.repliesFor(withId, d) : [];
+    var optH = 38, gap = 6;
+    var blockH = replies.length ? replies.length * (optH + gap) + 24 : 34;
+    var opts = replies.map(function (r, i) {
+      return { x: right.x + 10, y: right.y + right.h - blockH + 20 + i * (optH + gap), w: right.w - 20, h: optH, index: i };
+    });
+    var thread = { x: right.x + 8, y: right.y + 50, w: right.w - 16, h: right.h - 50 - blockH - 6 };
+    return { b: b, left: left, rows: rows, right: right, thread: thread, replies: replies, opts: opts, contacts: contacts };
+  }
+  apps.chatLayout = chatLayout;
+
   function chatThread(contactId) {
     var d = PVZ.state.data || {};
-    var log = (d.chatLog || []).filter(function (m) {
+    return (d.chatLog || []).filter(function (m) {
       var to = m.to || (m.from === 'me' ? 'artem' : m.from);
       return to === contactId;
     });
-    if (contactId === 'artem') {
-      var base = [];
-      if (!log.length) {
-        base.push({ from: 'artem', text: 'Здорово! Ты как там? Слышал, у тебя теперь свой ПВЗ.' });
-        base.push({ from: 'me', text: 'Держусь. Коробки сами себя не выдадут.' });
-        base.push({ from: 'artem', text: (d.debt || 0) > 0 ? 'Слушай, если вечером опять «гости» — не геройствуй. Лучше отдай и живи спокойно.' : 'Если что — я рядом, через два квартала.' });
-      }
-      if (d.cat) base.push({ from: 'artem', text: 'Кот у тебя уже командует? Мой вчера лёг на принтер.' });
-      if ((d.eggs || []).length > 2) base.push({ from: 'artem', text: 'К тебе опять приходил кто-то в шлеме? Мне тоже. Я уже не удивляюсь.' });
-      return log.concat(base).slice(-8);
-    }
-    if (contactId === 'mom') {
-      return [{ from: 'mom', text: 'Сынок, ты поел? Не сиди до ночи с этими коробками.' }, { from: 'me', text: 'Мам, у меня смена. Всё хорошо.' }];
-    }
-    return [{ from: 'support', text: 'Здравствуйте! По вопросам поставок, возвратов и рейтинга — пишите сюда.' }, { from: 'support', text: 'Совет дня: отвечайте на плохие отзывы в приложении «Отзывы».' }];
   }
+
   function drawChat(ctx, app, win, env) {
-    var b = screenShell(ctx, app, win, 'переписка и контакты');
-    var R = apps.chatRects(win);
+    var withId = chatWith(env);
+    var b = screenShell(ctx, app, win, 'живая переписка');
+    // при открытии переписки досыпаем новые сообщения этого дня
+    if (PVZ.talks && PVZ.talks.ensureThread) PVZ.talks.ensureThread(withId);
+    var R = chatLayout(win, withId);
     var d = PVZ.state.data || {};
-    var withId = (env.laptop && env.laptop.chatWith) || 'artem';
+    var unread = (PVZ.talks && PVZ.talks.pendingCount) ? PVZ.talks.pendingCount(d) : 0;
+
+    // левая колонка: контакты
     art.fillRR(ctx, R.left.x, R.left.y, R.left.w, R.left.h, 12, 'rgba(255,255,255,0.035)');
     art.txt(ctx, 'КОНТАКТЫ', R.left.x + 12, R.left.y + 18, 9, 'rgba(200,235,225,0.5)', 800);
-    CHAT_CONTACTS.forEach(function (c, i) {
+    if (unread) {
+      art.txt(ctx, String(unread), R.left.x + R.left.w - 14, R.left.y + 18, 10, '#ffb0a0', 800, 'right');
+    }
+    R.contacts.forEach(function (c, i) {
       var r = R.rows[i], on = c.id === withId;
       toneCard(ctx, r, on ? 'rgba(91,127,208,0.22)' : 'rgba(255,255,255,0.03)', on ? 'rgba(120,170,240,0.6)' : 'rgba(255,255,255,0.07)');
-      art.fillRR(ctx, r.x + 6, r.y + 5, 32, 32, 16, c.color);
-      art.txt(ctx, c.name[0], r.x + 22, r.y + 27, 14, '#fff', 900, 'center');
-      art.txt(ctx, c.name, r.x + 46, r.y + 18, 11.5, '#eafff8', 700);
-      art.txt(ctx, c.note, r.x + 46, r.y + 32, 8.5, 'rgba(200,235,225,0.45)', 600);
-      if (c.id === 'artem') art.txt(ctx, '●', r.x + r.w - 14, r.y + 18, 9, '#6fdc9a', 700);
+      var rh = r.h;
+      var av = Math.max(12, Math.min(31, rh - 4));
+      art.fillRR(ctx, r.x + 6, r.y + (rh - av) / 2, av, av, av / 2, c.color);
+      art.txt(ctx, c.initial || c.name[0], r.x + 6 + av / 2, r.y + rh / 2 + Math.max(3, av * 0.28), Math.max(7, av * 0.42), '#fff', 900, 'center');
+      var nameSize = rh >= 34 ? 11.5 : rh >= 26 ? 10.5 : 9;
+      var nameX = r.x + 6 + av + 7;
+      var fitName = art.fitTxt(ctx, c.name, r.w - (av + 24), nameSize, 700, 7);
+      var nameY = rh >= 30 ? r.y + rh * 0.42 : r.y + rh / 2 + 3;
+      art.txt(ctx, fitName.text, nameX, nameY, fitName.size, '#eafff8', 700);
+      if (rh >= 30) {
+        var fitNote = art.fitTxt(ctx, c.note, r.w - (av + 24), 8.5, 600, 7);
+        art.txt(ctx, fitNote.text, nameX, r.y + rh * 0.76, fitNote.size, 'rgba(200,235,225,0.45)', 600);
+      }
+      if (PVZ.talks && PVZ.talks.pendingNode && PVZ.talks.pendingNode(c.id, d)) {
+        art.fillRR(ctx, r.x + r.w - 18, r.y + rh / 2 - 4, 8, 8, 4, '#ff8a6a');
+      }
     });
+
     var right = R.right;
     toneCard(ctx, right, 'rgba(8,18,28,0.5)', 'rgba(120,170,240,0.16)');
-    var cur = CHAT_CONTACTS.filter(function (c) { return c.id === withId; })[0] || CHAT_CONTACTS[0];
+    var cur = R.contacts.filter(function (c) { return c.id === withId; })[0] ||
+      R.contacts[0] || { name: 'Чат', note: '', color: '#5b7fd0', initial: '?' };
     art.fillRR(ctx, right.x, right.y, right.w, 44, 12, 'rgba(30,50,74,0.6)');
     art.fillRR(ctx, right.x + 10, right.y + 8, 28, 28, 14, cur.color);
-    art.txt(ctx, cur.name[0], right.x + 24, right.y + 28, 12, '#fff', 900, 'center');
-    art.txt(ctx, cur.name, right.x + 46, right.y + 21, 13, '#eafff8', 800);
+    art.txt(ctx, cur.initial || cur.name[0], right.x + 24, right.y + 28, 12, '#fff', 900, 'center');
+    var nameFit = art.fitTxt(ctx, cur.name, right.w - 220, 13, 800, 10);
+    art.txt(ctx, nameFit.text, right.x + 46, right.y + 21, nameFit.size, '#eafff8', 800);
     art.txt(ctx, 'в сети · ' + cur.note, right.x + 46, right.y + 35, 8.5, 'rgba(160,220,200,0.55)', 600);
+    if (PVZ.talks && PVZ.talks.pendingNode && PVZ.talks.pendingNode(withId, d)) {
+      art.txt(ctx, '● новое', right.x + right.w - 12, right.y + 27, 9.5, '#ff9d7a', 800, 'right');
+    }
+
+    // лента сообщений: показываем хвост, который помещается
     var msgs = chatThread(withId);
-    var my = 0;
-    var startY = right.y + 56;
-    var space = right.h - 56 - 52;
-    var show = msgs.slice(-6);
-    var heights = show.map(function (m) {
-      var lines = U.wrapLines(ctx, m.text, right.w - 100, 11, 600);
-      return Math.max(34, 22 + lines.length * 15);
+    var maxW = R.thread.w - 76;
+    var heights = msgs.map(function (m) {
+      var lines = U.wrapLines(ctx, m.text, maxW - 24, 10.5, 600);
+      return Math.max(32, 20 + lines.length * 14);
     });
-    var totalH = heights.reduce(function (a, b2) { return a + b2 + 8; }, 0);
-    var yy = startY + Math.max(0, space - totalH);
-    show.forEach(function (m, i) {
-      var mine = m.from === 'me';
-      var lines = U.wrapLines(ctx, m.text, right.w - 100, 11, 600);
-      var bh = heights[i];
-      var bw = Math.min(right.w - 70, Math.max(92, lines.reduce(function (mx, l) { return Math.max(mx, art.txtW(ctx, l, 11, 600)); }, 0) + 26));
-      var bx = mine ? right.x + right.w - bw - 14 : right.x + 48;
-      art.fillRR(ctx, bx, yy, bw, bh, 10, mine ? 'rgba(74,134,184,0.85)' : 'rgba(255,255,255,0.09)');
-      lines.slice(0, 4).forEach(function (line, li) {
-        art.txt(ctx, line, bx + 12, yy + 18 + li * 15, 11, mine ? '#f2fbff' : '#e6f3ee', 600);
-      });
-      if (!mine) {
-        art.fillRR(ctx, right.x + 12, yy + 4, 28, 28, 14, cur.color);
-        art.txt(ctx, cur.name[0], right.x + 26, yy + 23, 11, '#fff', 900, 'center');
+    var totalH = heights.reduce(function (a, h) { return a + h + 6; }, 0);
+    var first = 0;
+    while (first < msgs.length && (totalH > R.thread.h || msgs.length - first > 7)) {
+      totalH -= heights[first] + 6;
+      first++;
+    }
+    var yy = R.thread.y + Math.max(0, R.thread.h - totalH);
+    var lastDay = null;
+    for (var mi = first; mi < msgs.length; mi++) {
+      var m = msgs[mi];
+      if (m.day !== lastDay) {
+        lastDay = m.day;
+        art.txt(ctx, 'день ' + (m.day || 1), R.thread.x + R.thread.w / 2, yy + 8, 8.5, 'rgba(160,200,190,0.4)', 700, 'center');
+        yy += 14;
       }
-      yy += bh + 8;
-    });
-    // поле быстрых ответов
-    R.quick.forEach(function (q) {
-      var hov = U.hit(q, PVZ.input.x, PVZ.input.y);
-      art.fillRR(ctx, q.x, q.y, q.w, q.h, 9, hov ? 'rgba(91,127,208,0.9)' : 'rgba(91,127,208,0.35)');
-      art.txt(ctx, q.text, q.x + q.w / 2, q.y + 20, 11, hov ? '#fff' : '#dce9ff', 700, 'center');
-    });
+      var mine = m.from === 'me';
+      var lines = U.wrapLines(ctx, m.text, maxW - 24, 10.5, 600);
+      var bh = heights[mi];
+      var textW = lines.reduce(function (mx, l) { return Math.max(mx, art.txtW(ctx, l, 10.5, 600)); }, 0);
+      var bw = Math.min(maxW, Math.max(86, textW + 24));
+      var bx = mine ? R.thread.x + R.thread.w - bw - 34 : R.thread.x + 38;
+      if (!mine) {
+        art.fillRR(ctx, R.thread.x + 4, yy + 3, 26, 26, 13, cur.color);
+        art.txt(ctx, cur.initial || cur.name[0], R.thread.x + 17, yy + 21, 11, '#fff', 900, 'center');
+      }
+      art.fillRR(ctx, bx, yy, bw, bh, 10, mine ? 'rgba(74,134,184,0.9)' : 'rgba(255,255,255,0.09)');
+      lines.slice(0, 4).forEach(function (line, li) {
+        art.txt(ctx, line, bx + 12, yy + 17 + li * 14, 10.5, mine ? '#f2fbff' : '#e6f3ee', 600);
+      });
+      yy += bh + 6;
+    }
+    if (!msgs.length) {
+      art.txt(ctx, 'Пока тихо. Напишите первым — или подождите до завтра.',
+        R.thread.x + R.thread.w / 2, R.thread.y + R.thread.h / 2, 12, 'rgba(200,235,225,0.45)', 600, 'center');
+    }
+
+    // варианты ответа
+    var panelH = R.replies.length ? R.replies.length * 44 + 26 : 34;
+    var panelY = right.y + right.h - panelH;
+    art.fillRR(ctx, right.x, panelY, right.w, panelH, 12, 'rgba(20,36,54,0.78)');
+    if (R.replies.length) {
+      art.txt(ctx, 'ВЫБЕРИТЕ ОТВЕТ', right.x + 12, panelY + 15, 8.5, 'rgba(170,215,240,0.5)', 800);
+      R.opts.forEach(function (q) {
+        var hov = U.hit(q, PVZ.input.x, PVZ.input.y);
+        art.fillRR(ctx, q.x, q.y, q.w, q.h, 9, hov ? 'rgba(91,127,208,0.92)' : 'rgba(91,127,208,0.3)');
+        art.strokeRR(ctx, q.x, q.y, q.w, q.h, 9, hov ? 'rgba(180,215,255,0.7)' : 'rgba(140,180,240,0.2)', 1);
+        var label = art.fitTxt(ctx, R.replies[q.index].t, q.w - 24, 11, 700, 9);
+        art.txt(ctx, label.text, q.x + 12, q.y + 24, label.size, hov ? '#fff' : '#dce9ff', 700);
+      });
+    } else {
+      var node = (PVZ.talks && PVZ.talks.currentNode) ? PVZ.talks.currentNode(withId, d) : null;
+      var hint = node ? 'Вы ответили. Продолжение — в следующий раз.' : 'Новых сообщений нет. Загляните завтра.';
+      art.txt(ctx, hint, right.x + right.w / 2, right.y + right.h - 14, 11, 'rgba(200,235,225,0.45)', 600, 'center');
+    }
     art.txt(ctx, 'Esc — на рабочий стол · ✕ — закрыть ноутбук', win.x + win.w / 2, win.y + win.h - 12, 10, 'rgba(200,235,225,0.4)', 600, 'center');
   }
 
@@ -1612,7 +1682,12 @@
     art.txt(ctx, stn.track < 0 ? 'фон выключен' : stn.desc, p.x + 170, p.y + 90, 11, 'rgba(255,220,240,0.55)', 600);
     if (stn.track >= 0) {
       var track = PVZ.music.TRACKS && PVZ.music.TRACKS[stn.track];
-      if (track) art.txt(ctx, 'темп ' + track.bpm + ' bpm · ' + track.id, p.x + 170, p.y + 112, 10, 'rgba(255,220,240,0.4)', 600);
+      if (track) {
+        var info = track.theme
+          ? 'темп ' + track.bpm + ' bpm · ' + track.id
+          : 'живая программа смены: утро · день · вечер';
+        art.txt(ctx, info, p.x + 170, p.y + 112, 10, 'rgba(255,220,240,0.4)', 600);
+      }
     }
     // кнопки
     var btn = function (r, label, primary) {
@@ -1859,29 +1934,20 @@
       return false;
     }
     if (id === 'chat') {
-      var CR = apps.chatRects(win);
+      var withId = chatWith(env);
+      var CR = chatLayout(win, withId);
       for (var ci = 0; ci < CR.rows.length; ci++) {
-        if (U.hit(CR.rows[ci], x, y)) { L.chatWith = CR.rows[ci].id; PVZ.audio.ui(); return true; }
-      }
-      for (var q = 0; q < CR.quick.length; q++) {
-        if (U.hit(CR.quick[q], x, y)) {
-          var text = CR.quick[q].text;
-          var withId = (L && L.chatWith) || 'artem';
-          PVZ.state.chatAdd('me', text, withId);
-          var replies = {
-            'Привет!': 'Привет-привет! Как смена?',
-            'Как дела?': 'Да как обычно: коробки, кофе, коробки. А у тебя?',
-            'Держись.': 'Стараюсь. Ты тоже держись, слышишь?'
-          };
-          if (withId === 'artem') {
-            PVZ.state.chatAdd('artem', replies[text] || 'Ага!', 'artem');
-          } else if (withId === 'mom') {
-            PVZ.state.chatAdd('mom', 'Спасибо, сынок. Ты только поешь вовремя.', 'mom');
-          } else {
-            PVZ.state.chatAdd('support', 'Ваш запрос принят. Оператор ответит в течение смены.', 'support');
-          }
-          PVZ.state.save();
+        if (U.hit(CR.rows[ci], x, y)) {
+          if (L) L.chatWith = CR.rows[ci].id;
+          if (PVZ.talks && PVZ.talks.ensureThread) PVZ.talks.ensureThread(CR.rows[ci].id);
           PVZ.audio.ui();
+          return true;
+        }
+      }
+      for (var q = 0; q < CR.opts.length; q++) {
+        if (U.hit(CR.opts[q], x, y)) {
+          var picked = PVZ.talks && PVZ.talks.answerChat ? PVZ.talks.answerChat(withId, CR.opts[q].index) : null;
+          if (picked) PVZ.audio.ui(); else PVZ.audio.bad();
           return true;
         }
       }
@@ -2045,14 +2111,37 @@
     return null;
   };
 
+  /* Можно ли продавать за рубли: в релизе только при живом платёжном мосте.
+     В браузере/Windows и в отладочных прогонах витрина работает как раньше. */
+  apps.premiumCanPay = function () {
+    return !!(PVZ.pay && PVZ.pay.canPay && PVZ.pay.canPay());
+  };
+
+  /* Нужен ли Premium store вообще: платежи или rewarded-реклама. */
+  apps.premiumAvailable = function () {
+    if (!window.PVZ_RELEASE) return true;
+    if (apps.premiumCanPay()) return true;
+    return !!(PVZ.ads && PVZ.ads.available && PVZ.ads.available());
+  };
+
   apps.premiumTab = function (id) {
-    for (var i = 0; i < apps.PREMIUM_TABS.length; i++) if (apps.PREMIUM_TABS[i].id === id) return id;
-    return 'bundles';
+    for (var i = 0; i < apps.PREMIUM_TABS.length; i++) {
+      if (apps.PREMIUM_TABS[i].id === id) {
+        // без платежей «Наборы» за рубли показывать нечего
+        if (id === 'bundles' && !apps.premiumCanPay()) return 'items';
+        return id;
+      }
+    }
+    return apps.premiumCanPay() ? 'bundles' : 'items';
   };
 
   apps.premiumTabItems = function (tab) {
     var t = apps.premiumTab(tab);
-    return apps.PREMIUM_ITEMS.filter(function (it) { return it.tab === t && !it.hidden; });
+    return apps.PREMIUM_ITEMS.filter(function (it) {
+      if (it.tab !== t || it.hidden) return false;
+      // за рубли — только когда платёж реально работает; за монеты — всегда
+      return apps.premiumCanPay() || !!it.coins || !!it.free;
+    });
   };
 
   /* Скидка подписки «ПВЗ Плюс» на цены в монетах: −20% */
@@ -2086,12 +2175,14 @@
   apps.premiumRects = function (win, tabId, ui) {
     var b = screenBox(win);
     var tab = apps.premiumTab(tabId);
+    var canPay = apps.premiumCanPay();
     var top = { x: b.x, y: b.y, w: b.w, h: 40 };
     var adBtn = { x: b.x + b.w - 300, y: b.y + 5, w: 142, h: 30 };
-    var topBtn = { x: b.x + b.w - 152, y: b.y + 5, w: 142, h: 30 };
+    var topBtn = canPay ? { x: b.x + b.w - 152, y: b.y + 5, w: 142, h: 30 } : null;
     var giftBtn = { x: b.x + 170, y: b.y + 5, w: 168, h: 30 };
     var tabY = b.y + 48, tabH = 24;
-    var tabs = apps.PREMIUM_TABS.map(function (tb, i) {
+    var tabDefs = apps.PREMIUM_TABS.filter(function (tb) { return canPay || tb.id !== 'bundles'; });
+    var tabs = tabDefs.map(function (tb, i) {
       return { id: tb.id, label: tb.label, rect: { x: b.x + i * 128, y: tabY, w: 120, h: tabH } };
     });
     var plusPill = { x: b.x + b.w - 252, y: b.y + 48, w: 252, h: 24 };
@@ -2117,7 +2208,7 @@
         return card;
       }
       var hasCoins = !!it.coins;
-      var hasRub = !!(it.rub && it.rub > 0);
+      var hasRub = !!(it.rub && it.rub > 0) && canPay;
       if (hasCoins && hasRub) {
         card.coinBtn = { kind: 'coins', x: r.x + 14, y: by, w: 112, h: 30 };
         card.rubBtn = { kind: 'rub', x: r.x + 136, y: by, w: 112, h: 30 };
@@ -2131,7 +2222,7 @@
       }
       return card;
     });
-    return { box: b, top: top, adBtn: adBtn, topBtn: topBtn, giftBtn: giftBtn, tabs: tabs, tab: tab, cards: cards, plusPill: plusPill };
+    return { box: b, top: top, adBtn: adBtn, topBtn: topBtn, giftBtn: giftBtn, tabs: tabs, tab: tab, canPay: canPay, cards: cards, plusPill: plusPill };
   };
 
   apps.premiumModalRects = function (win, ui) {
@@ -2250,6 +2341,10 @@
   apps.premiumCheckout = function (id, ui) {
     var it = apps.premiumItem(id);
     if (!it) return { ok: false, msg: 'Товар не найден.' };
+    if (!apps.premiumCanPay()) {
+      apps.premiumNotify(ui, 'Покупки за рубли ещё не подключены — играйте за монеты.');
+      return { ok: false, msg: 'Покупки за рубли не подключены.' };
+    }
     if (!PVZ.pay || !PVZ.pay.buy) return apps.premiumBuy(id, 'rub', ui);
     PVZ.pay.buy({ sku: 'premium.' + id, title: it.name, price: it.rub, currency: 'RUB' }, function (res) {
       if (!res || !res.ok) {
@@ -2303,7 +2398,42 @@
       apps.premiumNotify(ui, 'Бонус без рекламы: +' + gain + ' ' + apps.premiumCoinsWord(gain) + '.');
       return;
     }
+
+    // настоящий rewarded-ролик из Android-обёртки (Yandex Mobile Ads / VK Ads)
+    if (PVZ.ads && PVZ.ads.available()) {
+      if (ui && ui.adLoading) return;
+      if (ui) ui.adLoading = true;
+      apps.premiumNotify(ui, 'Загружаем рекламу…');
+      PVZ.ads.showRewarded('premium_coins', function (res) {
+        if (ui) ui.adLoading = false;
+        if (!res || !res.ok) {
+          apps.premiumNotify(ui, res && res.cancelled
+            ? 'Ролик закрыт — награда не начислена.'
+            : 'Реклама сейчас недоступна. Загляните позже.');
+          return;
+        }
+        apps.premiumGrantAd(ui);
+      });
+      return;
+    }
+
+    // в браузере/Windows моста нет: демо-ролик только вне релиза
+    if (window.PVZ_RELEASE) {
+      apps.premiumNotify(ui, 'Реклама пока недоступна.');
+      return;
+    }
     if (ui) ui.ad = { t: 4.5 };
+  };
+
+  /* Начисление награды за досмотренный ролик (общая точка) */
+  apps.premiumGrantAd = function (ui) {
+    var gain = apps.premiumAdGain();
+    PVZ.state.premiumCoins(gain);
+    var p = PVZ.state.premium();
+    p.adsWatched = (p.adsWatched || 0) + 1;
+    PVZ.state.save();
+    PVZ.audio.coin();
+    apps.premiumNotify(ui, 'Реклама просмотрена: +' + gain + ' ' + apps.premiumCoinsWord(gain) + '.');
   };
 
   /* Ежедневный подарок ПВЗ Плюса */
@@ -2327,13 +2457,7 @@
       ui.ad.t -= dt;
       if (ui.ad.t <= 0) {
         ui.ad = null;
-        var gain = apps.premiumAdGain();
-        PVZ.state.premiumCoins(gain);
-        var p = PVZ.state.premium();
-        p.adsWatched = (p.adsWatched || 0) + 1;
-        PVZ.state.save();
-        PVZ.audio.coin();
-        apps.premiumNotify(ui, 'Реклама просмотрена: +' + gain + ' ' + apps.premiumCoinsWord(gain) + '.');
+        apps.premiumGrantAd(ui);
       }
     }
   };
@@ -2407,8 +2531,8 @@
       art.txt(ctx, line, r.x + 68, r.y + 49 + li * 12, 9.8, 'rgba(220,240,230,0.55)', 600);
     });
 
-    // «было / выгода»
-    if (it.oldRub && it.oldRub > it.rub && it.rub) {
+    // «было / выгода» — только когда рубли реально работают
+    if (apps.premiumCanPay() && it.oldRub && it.oldRub > it.rub && it.rub) {
       strikePrice(ctx, it.oldRub + ' ₽', r.x + 14, r.y + r.h - 50, 9.5);
       var saved = apps.premiumSaved(it);
       art.txt(ctx, 'выгода ' + saved + ' ₽', r.x + r.w - 14, r.y + r.h - 50, 10, '#9fe0b0', 800, 'right');
@@ -2493,16 +2617,20 @@
     art.txt(ctx, adLabel, R.adBtn.x + R.adBtn.w / 2, R.adBtn.y + 20, 10,
       adWait ? 'rgba(255,240,200,0.45)' : '#241d08', 800, 'center');
 
-    var topHov = U.hit(R.topBtn, PVZ.input.x, PVZ.input.y);
-    art.fillRR(ctx, R.topBtn.x, R.topBtn.y, R.topBtn.w, R.topBtn.h, 9,
-      topHov ? 'rgba(255,255,255,0.24)' : 'rgba(255,255,255,0.1)');
-    art.txt(ctx, art.compact ? 'Пополнить' : 'Пополнить монеты',
-      R.topBtn.x + R.topBtn.w / 2, R.topBtn.y + 20, 10, '#fff3e2', 800, 'center');
+    var topHov = R.topBtn && U.hit(R.topBtn, PVZ.input.x, PVZ.input.y);
+    if (R.topBtn) {
+      art.fillRR(ctx, R.topBtn.x, R.topBtn.y, R.topBtn.w, R.topBtn.h, 9,
+        topHov ? 'rgba(255,255,255,0.24)' : 'rgba(255,255,255,0.1)');
+      art.txt(ctx, art.compact ? 'Пополнить' : 'Пополнить монеты',
+        R.topBtn.x + R.topBtn.w / 2, R.topBtn.y + 20, 10, '#fff3e2', 800, 'center');
+    }
 
-    var promo = 'СКИДКИ −84%';
-    var promoW = art.txtW(ctx, promo, 9, 900) + 16;
-    art.fillRR(ctx, b.x + 346, b.y + 9, promoW, 22, 11, 'rgba(228,87,46,0.9)');
-    art.txt(ctx, promo, b.x + 346 + promoW / 2, b.y + 24, 9, '#fff', 900, 'center');
+    if (R.canPay) {
+      var promo = 'СКИДКИ −84%';
+      var promoW = art.txtW(ctx, promo, 9, 900) + 16;
+      art.fillRR(ctx, b.x + 346, b.y + 9, promoW, 22, 11, 'rgba(228,87,46,0.9)');
+      art.txt(ctx, promo, b.x + 346 + promoW / 2, b.y + 24, 9, '#fff', 900, 'center');
+    }
 
     // ---- табы ----
     R.tabs.forEach(function (tb) {
@@ -2521,7 +2649,7 @@
       art.fillRR(ctx, pp.x, pp.y, pp.w, pp.h, 10, 'rgba(201,162,39,0.2)');
       art.strokeRR(ctx, pp.x, pp.y, pp.w, pp.h, 10, 'rgba(255,212,121,0.4)', 1);
       art.txt(ctx, plFit.text, pp.x + pp.w / 2, pp.y + 16, plFit.size, '#ffd479', 800, 'center');
-    } else {
+    } else if (R.canPay) {
       var pulse = 0.45 + 0.35 * Math.sin(t * 2.2);
       var upsell = '✦ ПВЗ Плюс −20% · 299 ₽';
       var upFit = art.fitTxt(ctx, upsell, pp.w - 14, 10, 800, 8);
@@ -2533,17 +2661,24 @@
 
     // ---- карточки ----
     R.cards.forEach(function (c) { drawPremiumCard(ctx, c, t); });
+    if (!R.cards.length) {
+      art.txt(ctx, R.canPay ? 'Товары появятся позже.' : 'Покупки за рубли подключаются. Пока — монеты за рекламу.',
+        640, b.y + 190, 14, 'rgba(255,240,210,0.6)', 600, 'center');
+    }
 
     // ---- подвал ----
     if (ui.msg) {
       art.txt(ctx, ui.msg, b.x, b.y + b.h - 2, 10, '#9fe0b0', 700);
     } else {
-      art.txt(ctx, 'Монеты — за рекламу, товары — навсегда. Оплата демонстрационная: деньги не списываются.',
+      art.txt(ctx, R.canPay
+          ? 'Монеты — за рекламу, товары — навсегда. Оплата через магазин приложений.'
+          : 'Монеты — за просмотр рекламы. Покупки за рубли подключаются.',
         b.x, b.y + b.h - 2, 9.5, 'rgba(200,235,225,0.35)', 600);
     }
-    var payLabel = (PVZ.pay && PVZ.pay.isLive())
-      ? 'оплата: ' + (PVZ.pay.provider() === 'rustore' ? 'RuStore' : 'платёжная страница')
-      : 'демо-оплата';
+    var payLabel = !R.canPay ? 'оплата не подключена'
+      : (PVZ.pay && PVZ.pay.isLive())
+        ? 'оплата: ' + (PVZ.pay.provider() === 'rustore' ? 'RuStore' : 'платёжная страница')
+        : 'демо-оплата';
     art.txt(ctx, payLabel, win.x + win.w - 26, b.y + b.h - 2, 9, 'rgba(200,235,225,0.35)', 600, 'right');
 
     // ---- модальные окна ----
@@ -2607,7 +2742,7 @@
       ctx.save();
       ctx.fillStyle = 'rgba(5,4,3,0.82)'; ctx.fillRect(win.x, win.y, win.w, win.h);
       art.panel(ctx, ab.x, ab.y, ab.w, ab.h, { bg: 'rgba(20,26,24,0.99)', r: 16, border: 'rgba(255,212,121,0.35)' });
-      art.txt(ctx, 'РЕКЛАМА · ДЕМО', ab.x + 24, ab.y + 30, 11, 'rgba(255,240,210,0.55)', 800);
+      art.txt(ctx, 'РЕКЛАМА', ab.x + 24, ab.y + 30, 11, 'rgba(255,240,210,0.55)', 800);
       art.txt(ctx, 'ПВЗ-КОФЕ', ab.x + ab.w / 2, ab.y + 96, 34, '#ffd479', 900, 'center');
       art.txt(ctx, 'Бодрость на всю смену. Пейте, пока коробки не остыли.', ab.x + ab.w / 2, ab.y + 130, 13, '#eafff8', 600, 'center');
       art.txt(ctx, '☕', ab.x + ab.w / 2, ab.y + 196, 54, '#e8c08a', 700, 'center');
@@ -2662,7 +2797,7 @@
 
     // верхняя панель
     if (U.hit(R.adBtn, x, y)) { apps.premiumClaimAd(ui); PVZ.audio.ui(); return true; }
-    if (U.hit(R.topBtn, x, y)) { ui.tab = 'coins'; PVZ.audio.click(); return true; }
+    if (R.topBtn && U.hit(R.topBtn, x, y)) { ui.tab = 'coins'; PVZ.audio.click(); return true; }
     if (U.hit(R.giftBtn, x, y)) {
       if (PVZ.state.premiumHasPlus()) apps.premiumClaimDaily(ui);
       else { ui.tab = 'bundles'; apps.premiumNotify(ui, 'Подарок и −20% — в ПВЗ Плюсе. Он на вкладке «Наборы».'); }

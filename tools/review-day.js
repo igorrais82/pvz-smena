@@ -32,12 +32,12 @@
     const order = st.orders.find(o => o.id === (c.orderIds && c.orderIds[0]));
     if (!order) { out.errors.push('нет заказа у клиента ' + n); break; }
     c.codeScanned = true;
-    st.held = { id: order.id, code: order.code, item: order.item, scanned: true };
+    st.held = { id: order.id, code: order.code, item: order.item, kind: order.kind, scanned: true, onTable: true, unpacked: true, placeT: 1 };
 
     let guard = 0;
     while (st.customer && guard++ < 25) {
       if (st.dlg) {
-        const idx = st.dlg.choices.findIndex(ch => /Выдать заказ|Выдать посылку/.test(ch.label));
+        const idx = st.dlg.choices.findIndex(ch => /Отдать товар|Выдать заказ|Выдать посылку/.test(ch.label));
         const r = st.dlg.choiceRects[idx >= 0 ? idx : 0];
         tap(r.x + 45, r.y + 22);
         await wait(260);

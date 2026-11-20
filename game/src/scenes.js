@@ -13,16 +13,16 @@
   var EVENING_START = 20 * 60;
   var CLOSE_LIMIT = 21 * 60 + 30;
 
-  /* План растёт до 12 выдач и не превращает смену в конвейер.
-     Дальше давление создают терпение, поток людей и события, а не цифра плана. */
+  /* План растёт до 16 выдач: к десятой смене зал полон, и план честно
+     требует скорости. Дальше давление создают терпение, поток людей и события. */
   function planFor(day) {
-    return Math.min(12, 8 + Math.ceil(Math.max(1, day) * 0.6)) + (PVZ.state.level ? PVZ.state.level('ad') * 2 : 0);
+    return Math.min(16, 6 + Math.ceil(Math.max(1, day))) + (PVZ.state.level ? PVZ.state.level('ad') * 2 : 0);
   }
   function supplyFor(day) { return 5 + Math.min(4, Math.floor(day * 0.7)); }
   function storedFor(day) { return Math.min(16, 8 + Math.round(day * 1.2)); }
-  /* Терпение тает быстрее с каждой сменой: 1.0 на первой, ~2.4 к десятой.
+  /* Терпение тает быстрее с каждой сменой: 1.0 на первой, ~2.2 к десятой.
      Это главный источник напряжения: обслуживать надо всё быстрее. */
-  function patienceScale(day) { return Math.min(2.6, 1 + Math.max(0, day - 1) * 0.16); }
+  function patienceScale(day) { return Math.min(2.2, 1 + Math.max(0, day - 1) * 0.15); }
 
   /* «Событие дня» — погода и обстоятельства, которые меняют правила смены.
      Выбирается заново каждое утро и показывается в HUD.
@@ -942,6 +942,11 @@
       targetCell: null,
       targetOrder: null,
       fitting: [],
+      /* сцена выдачи и особый гость смены */
+      moment: null,
+      special: null,
+      specialBanner: 0,
+      smash: null,
       cashDone: false,
       returnsDone: false,
       shiftOpen: false,
@@ -956,7 +961,7 @@
       plan: planFor(cfg.day || 1),
       mods: mods,
       dev: { open: false, patience: false },
-      stats: { served: 0, complaints: 0, returns: 0, received: 0, revenue: 0, waitSum: 0, waitN: 0, late: 0, tips: 0 },
+      stats: { served: 0, complaints: 0, returns: 0, received: 0, revenue: 0, waitSum: 0, waitN: 0, late: 0, tips: 0, specials: 0, moments: 0 },
       lateDone: false,
       lateWaiting: false,
       catAnim: { anim: 'sit', t: 0 },
@@ -966,6 +971,8 @@
       friendCheck: 0,
       bossCallT: 0,
       shadyCooldown: 0,
+      npcT: 6,
+      npcSpawned: false,
       reviewBombDay: 0,
       arrest: null,
       arrestT: 0,
@@ -975,6 +982,11 @@
       comboFlash: 0,
       rush: null,
       rushNext: 0,
+      // постоянные персонажи: очередь рекомендаций, «забытые» посылки и их звуки
+      refQueue: [],
+      boxIdx: 0,
+      susT: 0,
+      susPing: null,
       dayMod: DAY_MODS[0],
       morning: { light: false, terminal: false, door: false }
     };
@@ -1002,6 +1014,11 @@
 
     /* ---------------- утилиты сцены ---------------- */
     function msg(text, kind) { st.msg = text; st.msgT = 0; st.msgKind = kind || 'info'; }
+
+    function boxNote() {
+      if (!PVZ.boxes || !PVZ.boxes.count()) return '';
+      return ' В зале у стены — забытые посылки: ' + PVZ.boxes.count() + '.';
+    }
 
     function objective(id) { return st.objectives.find(function (o) { return o.id === id; }); }
     function setObjective(id, done) { var ob = objective(id); if (ob) ob.done = done; }
@@ -1102,7 +1119,11 @@
         check: function () { return !!(st.held && st.held.onTable && st.held.scanned); }, target: 'parcel', where: 'стол'
       },
       {
-        id: 'give', text: 'Нажмите на покупателя и выберите «Выдать заказ».',
+        id: 'unpack', text: 'Коробка на столе. Нажмите на неё: возьмите нож, проведите им по скотчу, затем ножницами разрежьте пакет и достаньте товар.',
+        check: function () { return !!(st.held && st.held.unpacked); }, target: 'parcel', where: 'вскрыть коробку'
+      },
+      {
+        id: 'give', text: 'Товар у вас в руках. Нажмите на покупателя и отдайте заказ.',
         check: function () { return st.stats.served > 0; }, target: 'customer', where: 'покупатель'
       },
       {
@@ -1654,6 +1675,7 @@
         };
       });
       openDialog({
+        scary: true,
         name: story.name,
         person: story.person || null,
         role: story.role,
@@ -1849,6 +1871,7 @@
         }
       ];
       openDialog({
+        scary: true,
         name: 'Артём · входящий',
         person: null,
         icon: '📱',
@@ -1886,6 +1909,7 @@
         });
       }
       openDialog({
+        scary: true,
         name: 'Мафия',
         person: null,
         icon: '♠',
@@ -1928,8 +1952,12 @@
       st.plan = Math.max(6, planFor(st.day) + (st.dayMod.planAdd || 0));
       if (PVZ.state.data) PVZ.state.data.lastDayMod = st.dayMod.id;
       st.talon = 1;
-      st.stats = { served: 0, complaints: 0, returns: 0, received: 0, revenue: 0, waitSum: 0, waitN: 0, late: 0, tips: 0 };
+      st.stats = { served: 0, complaints: 0, returns: 0, received: 0, revenue: 0, waitSum: 0, waitN: 0, late: 0, tips: 0, referred: 0, refBonus: 0, boxes: 0, specials: 0, moments: 0 };
       st.fitting = [];
+      st.moment = null;
+      st.special = null;
+      st.specialBanner = 0;
+      st.smash = null;
       st.queue = [];
       st.leavers = [];
       st.customer = null;
@@ -1947,6 +1975,15 @@
       st.rush = null;
       st.rushNext = U.rand(55, 95);
       st.shadyCooldown = 0;
+      st.susT = U.rand(40, 70);
+      st.susPing = null;
+      st.refQueue = [];
+      st.boxIdx = 0;
+      // «забытые» посылки копятся изо дня в день: никто за ними не приходит
+      if (PVZ.boxes) {
+        var freshBox = PVZ.boxes.arrive(st.day);
+        if (freshBox) st.stats.boxes = PVZ.boxes.count();
+      }
     }
 
     function startPhase(phase, silent) {
@@ -1969,6 +2006,15 @@
         st.rushNext = U.rand(50, 90);
         st.combo = 0;
         st.comboFlash = 0;
+        st.npcSpawned = false;
+        st.npcT = 6;
+        st.moment = null;
+        st.special = null;
+        st.specialBanner = 0;
+        st.smash = null;
+        // предупреждение об особом госте дня
+        var warn = PVZ.serve && PVZ.serve.warning(st.day, PVZ.state.data);
+        if (warn && st.day > 1) msg(warn, 'info');
       } else if (phase === 'evening') {
         st.clock = Math.max(st.clock, EVENING_START);
         st.objectives = sys.eveningObjectives();
@@ -1988,6 +2034,9 @@
         st.queue.length = 0;
         st.customer = null;
         st.held = null;
+        if (st.special) st.special.done = true;
+        st.specialBanner = 0;
+        st.moment = null;
         st.fitting.forEach(function (f) { f.order.state = 'stored'; f.order.customer = null; });
         st.fitting = [];
         if (!silent) msg('19:00–21:00. Закрываемся: дверь, возвраты, касса.', 'info');
@@ -2005,17 +2054,29 @@
       if (allObjectivesDone()) {
         startPhase('day');
         var modNote = st.dayMod && st.dayMod.id !== 'calm' ? ' ' + st.dayMod.icon + ' сегодня ' + st.dayMod.label + '.' : '';
-        msg('Смена открыта. План на день — ' + st.plan + ' выдач.' + modNote, 'good');
+        msg('Смена открыта. План на день — ' + st.plan + ' выдач.' + modNote + boxNote(), 'good');
         PVZ.state.addRating(0.03);
       }
     }
 
     /* ---------------- покупатели ---------------- */
+    /* Поток людей: первая смена — редкие гости, к десятой — плотная очередь.
+       22 секунды на первой смене, ~18 на второй, ~10 на пятой и ~3,5 к десятой.
+       Очередь при этом тоже растёт, поэтому зал постепенно заполняется. */
+    function spawnBase(day) {
+      return Math.max(3.0, 22 * Math.pow(0.815, Math.max(0, day - 1)));
+    }
+    function maxLineFor(day) {
+      var base = Math.min(QUEUE_SLOTS.length, 2 + Math.floor(Math.max(0, day - 1) * 0.75));
+      if (st.rush && st.rush.on) base += 1;
+      if (st.mods && st.mods.adSpawn) base += 1;
+      return Math.min(QUEUE_SLOTS.length, base);
+    }
     function scheduleSpawn() {
       var mod = st.dayMod || DAY_MODS[0];
-      var base = Math.max(4.2, 13.5 - st.day * 1.15) * (st.mods.spawn || 1) * (mod.spawn || 1);
+      var base = spawnBase(st.day) * (st.mods.spawn || 1) * (mod.spawn || 1);
       if (st.rush && st.rush.on) base = Math.min(base, 2.4);
-      st.spawnT = U.rand(base, base + Math.max(2, 6.5 - st.day * 0.35));
+      st.spawnT = U.rand(base, base + Math.max(1.2, base * 0.3));
     }
 
     function availableOrdersFor() {
@@ -2025,6 +2086,12 @@
       return storedOrders().filter(function (o) {
         return o.cell && !busy[o.id] && sys.storageLeft(o, st.day) > 0;
       });
+    }
+
+    function castGreeting(c) {
+      if (!c || !c.castId || !PVZ.cast) return '';
+      var ch = PVZ.cast.byId(c.castId);
+      return ch ? PVZ.cast.greeting(ch, c) : '';
     }
 
     function spawnCustomer(forcedKind) {
@@ -2112,6 +2179,45 @@
         c.moodIcon = gm.icon;
       }
       c.kind = kind;
+      // ---- постоянный персонаж: у каждого покупателя своё лицо и своя история
+      var special = kind === 'guest' || kind === 'shady' || kind === 'cat_story' || kind === 'npc';
+      if (!special && PVZ.cast) {
+        var ch = null;
+        var referredBy = null;
+        if (st.refQueue && st.refQueue.length) {
+          var ref = st.refQueue.shift();
+          ch = PVZ.cast.byId(ref.charId);
+          if (ch) referredBy = ref.by;
+        }
+        if (!ch) ch = PVZ.cast.pick(st.day, PVZ.state.data);
+        if (ch) {
+          PVZ.cast.dress(c, ch);
+          c.castNew = !!PVZ.cast.lastPickNew;
+          if (referredBy) {
+            c.referredBy = referredBy;
+            c.castNew = true;
+            PVZ.cast.markMet(ch.id, st.day);
+            st.stats.referred++;
+            msg('По рекомендации от ' + referredBy + ' зашёл(ла) ' + ch.name + '.', 'good');
+          } else if (c.castNew) {
+            msg('Новое лицо: ' + ch.name + ' — ' + ch.role + '. С ним можно поговорить у стойки.', 'info');
+          } else if (ch.align === 'bad' && U.chance(0.55)) {
+            msg(ch.name + ' снова в зале. С ним лучше держать ухо востро.', 'bad');
+          }
+          // характер персонажа важнее случайного настроения
+          var cmood = PVZ.cast.moodOf(ch);
+          if (cmood) {
+            var cm = sys.mood(cmood);
+            c.mood = cm.id;
+            c.moodLabel = cm.label;
+            c.moodIcon = cm.icon;
+          }
+        }
+      }
+      // у обычного покупателя всегда есть тема для живого разговора
+      if (kind === 'pickup' || kind === 'return' || kind === 'question' || kind === 'resolve' || kind === 'story') {
+        c.talkTopic = PVZ.talks ? PVZ.talks.pickTopic(PVZ.state.data) : null;
+      }
       c.talon = st.talon++;
       c.patience = 1;
       c.state = 'queue';
@@ -2126,6 +2232,7 @@
       c.wantsFitting = false;
       c.fittingDone = false;
       c.fittingOrder = null;
+      c.momentDone = false;
       c.paid = false;
       c.codSum = 0;
       c.docs = false;
@@ -2156,7 +2263,7 @@
           c.parcels = chosen.length;
           c.codSum = chosen.reduce(function (s, o) { return s + (o.cod ? o.codSum : 0); }, 0);
           c.docs = chosen.some(function (o) { return o.docs; });
-          c.wantsFitting = chosen.length === 1 && order.kind === 'clothes' && U.chance(0.5);
+          c.wantsFitting = chosen.length === 1 && order.kind === 'clothes' && U.chance(0.72);
           c.ask = 'Заказ ' + order.code + ', ' + order.item.toLowerCase() + '.';
           // для обучения первый покупатель — максимально простой
           if (tutPick) { c.codSum = 0; c.docs = false; c.wantsFitting = false; }
@@ -2192,13 +2299,16 @@
         msg('Кофе от Артёма: следующий покупатель терпеливее.', 'good');
       }
       var mood = sys.mood(c.mood);
+      var hi = castGreeting(c);
       if (c.kind === 'pickup') {
-        c.bubble = U.pick(mood.greet) + ' ' + (c.parcels > 1 ? 'У меня ' + c.parcels + ' посылки.' : 'Вот мой код получения.');
+        c.bubble = (hi || U.pick(mood.greet)) + ' ' + (c.parcels > 1 ? 'У меня ' + c.parcels + ' посылки.' : 'Вот мой код получения.');
         c.revealed = true;
         // «Камера у стойки»: код с телефона читается сразу, без мини-игры
         if (PVZ.state.mods().autoCode) c.codeScanned = true;
+      } else if (c.kind === 'npc') {
+        c.bubble = U.pick(['Есть разговор.', 'Здравствуйте. На пару слов?', 'Можно вас на минуту?']);
       } else {
-        c.bubble = U.pick(mood.greet);
+        c.bubble = hi || U.pick(mood.greet);
       }
       c.bubbleAlpha = 0;
       st.bellRinging = 0;
@@ -2212,23 +2322,33 @@
       c.moving = Math.abs(x - c.vx) > 1.4 || Math.abs(gy - c.vgy) > 1.4 || Math.abs(h - c.vh) > 1.4;
     }
 
+    /* Восемь мест в очереди: на первой смене заняты одно-два, к десятой
+       зал стоит плотно. Второй ряд чуть дальше и мельче — так очередь
+       читается как живая толпа, а не как ряд одинаковых фигур. */
     var QUEUE_SLOTS = [
-      { x: 1012, gy: 505, h: 348 },
-      { x: 1076, gy: 498, h: 330 },
-      { x: 1138, gy: 492, h: 314 },
-      { x: 1196, gy: 488, h: 300 }
+      { x: 950, gy: 507, h: 352 },
+      { x: 1026, gy: 501, h: 334 },
+      { x: 1100, gy: 496, h: 318 },
+      { x: 1170, gy: 490, h: 304 },
+      // второй ряд — у самой стены: плечи и головы видны, ноги прячутся за первым
+      { x: 1218, gy: 472, h: 286 },
+      { x: 1150, gy: 469, h: 278 },
+      { x: 1078, gy: 466, h: 270 },
+      { x: 1006, gy: 463, h: 262 }
     ];
 
     function updateCrowd(dt) {
       st.crowd = [];
-      st.queue.forEach(function (c, i) {
-        var s = QUEUE_SLOTS[Math.min(i, QUEUE_SLOTS.length - 1)];
+      // дальние стоят ближе к стене — рисуем их первыми, чтобы ближние перекрывали
+      for (var qi = st.queue.length - 1; qi >= 0; qi--) {
+        var c = st.queue[qi];
+        var s = QUEUE_SLOTS[Math.min(qi, QUEUE_SLOTS.length - 1)];
         moveTo(c, s.x, s.gy, s.h * c.height, dt, 5.0);
         c.walking = c.moving;
         c.enterAlpha = Math.min(1, (c.enterAlpha == null ? 1 : c.enterAlpha) + dt * 3.2);
         if (c.bubble) c.bubbleAlpha = Math.min(1, (c.bubbleAlpha || 0) + dt * 3.5);
-        st.crowd.push({ person: c, x: c.vx, gy: c.vgy, h: c.vh, walking: c.moving, mood: i === 0 ? c.moodIcon : null, small: true, bubbleAlpha: 0, alpha: c.enterAlpha });
-      });
+        st.crowd.push({ person: c, x: c.vx, gy: c.vgy, h: c.vh, walking: c.moving, mood: qi === 0 ? c.moodIcon : null, small: true, bubbleAlpha: 0, alpha: c.enterAlpha });
+      }
 
       if (st.customer) {
         var c = st.customer;
@@ -2240,6 +2360,8 @@
         if (c.bubble) c.bubbleAlpha = Math.min(1, (c.bubbleAlpha || 0) + dt * 4);
         st.crowd.push({
           person: c, x: c.vx, gy: c.vgy, h: c.vh, walking: c.moving, alpha: c.enterAlpha,
+          // стопы за прилавком не видны — фигуру приподнимаем, чтобы над стойкой были плечи
+          lift: 0.075,
           mood: c.arrived ? c.moodIcon : null, bubbleAlpha: c.bubbleAlpha
         });
       }
@@ -2256,6 +2378,19 @@
     function leaveCustomer(customer, ok, reason) {
       var c = customer || st.customer;
       if (!c) return;
+      // покупатель уже ушёл (например, терпение кончилось во время QTE)
+      if (c.state === 'leaving') return;
+      // особый гость ушёл сам — его история закрыта, буянить больше некому
+      if (c.kind === 'special' && st.special && st.special.c === c && !st.special.done) {
+        st.special.done = true;
+        st.specialBanner = 0;
+        st.moment = null;
+        if (st.special.def.danger) {
+          st.smash = { t: 0, x: 985, y: 470, seed: 6 };
+          PVZ.state.addRating(-0.05);
+          msg('Гром ушёл, не дождавшись, — и напоследок снёс ещё одну коробку.', 'bad');
+        }
+      }
       if (!ok) {
         c.expr = 'angry';
         c.bubble = U.pick(['Безобразие!', 'Я буду жаловаться.', 'Больше сюда не приду.']);
@@ -2268,11 +2403,33 @@
         PVZ.audio.bad();
         breakCombo(reason);
         if (reason) msg(reason + ' −' + TARIFF.complaint + ' ₽', 'bad');
+        // плохой персонаж, уходя без заказа, может оставить после себя «подарок»
+        if (c.castAlign === 'bad' && !c.leftBox && PVZ.boxes && U.chance(0.35)) {
+          c.leftBox = true;
+          var lb = PVZ.boxes.add('stolen', st.day, { note: 'Осталась после ' + c.name + '.' });
+          if (lb) msg('После ' + c.name + ' в зале осталась безымянная коробка. Никто за ней не приходит.', 'bad');
+        }
       } else {
         c.expr = c.patience > 0.55 ? 'happy' : 'neutral';
         c.bubble = U.pick(['Спасибо!', 'До свидания!', 'Спасибо, хорошего дня!', 'Приятно было!']);
         // довольный клиент тянет рейтинг вверх: быстро и вежливо — пятёрка
-        PVZ.state.rateVisit(c.expr === 'happy' ? 5 : 4);
+        var score = c.expr === 'happy' ? 5 : 4;
+        // «плохие» персонажи и в хорошем настроении скупы на пятёрки,
+        // но с теми, с кем подружились, оттаивают
+        if (c.castAlign === 'bad' && score === 5) {
+          score = PVZ.cast && c.castId && PVZ.cast.rel(c.castId) >= 2 ? 4 : 3;
+        }
+        PVZ.state.rateVisit(score);
+        if (c.castAlign === 'good' && c.expr === 'happy') PVZ.state.addRating(0.005);
+        // человек пришёл по рекомендации: знакомый не зря хвалил пункт
+        if (c.referredBy && !c.refRewarded) {
+          c.refRewarded = true;
+          PVZ.state.addMoney(30);
+          st.stats.revenue += 30;
+          st.stats.refBonus += 30;
+          PVZ.state.addRating(0.02);
+          msg('Клиент пришёл по рекомендации — +30 ₽ и плюс к репутации.', 'good');
+        }
       }
       c.bubbleAlpha = 1;
       if (c.orderIds) {
@@ -2286,6 +2443,9 @@
         c.reviewed = true;
         if (U.chance(0.7)) {
           var sc = !ok ? (U.chance(0.5) ? 1 : 2) : c.expr === 'sad' ? 3 : c.expr === 'happy' ? 5 : 4;
+          if (ok && c.castAlign === 'bad' && sc >= 4) {
+            sc = PVZ.cast && c.castId && PVZ.cast.rel(c.castId) >= 2 ? 4 : 3;
+          }
           var rv = sys.addReview(c, sc);
           if (rv && rv.score <= 2) msg('Плохой отзыв от ' + rv.author + '. Ответьте в ноутбуке → Отзывы.', 'bad');
         }
@@ -2345,6 +2505,13 @@
     }
 
     /* ---------------- выдача и оплата ---------------- */
+    /* Передача товара в руки покупателю: короткая анимация, чтобы было видно,
+       что отдаём именно тот товар, который достали из коробки. */
+    function handoffProduct() {
+      if (!st.held || !st.held.unpacked) return;
+      st.handoff = { item: st.held.item, kind: st.held.kind, code: st.held.code, t: 0 };
+    }
+
     function issueParcel(order, c) {
       if (!order) return;
       order.state = 'issued';
@@ -2371,7 +2538,7 @@
         msg('План дня выполнен: ' + st.plan + ' выдач! Премия в конце смены.', 'good');
         PVZ.state.addRating(0.05);
       }
-      if (c) c.bubble = U.pick(['Спасибо!', 'О, быстро!', 'Отлично, спасибо.']);
+      if (c) c.bubble = PVZ.serve ? PVZ.serve.handoffLine(order) : U.pick(['Спасибо!', 'О, быстро!', 'Отлично, спасибо.']);
     }
 
     function giveTip(c) {
@@ -2423,6 +2590,8 @@
         title: title,
         sub: sub,
         onDone: function (ok) {
+          // пока шла оплата, клиент мог не дождаться и уйти
+          if (c.state === 'leaving') return;
           if (ok) {
             c.paid = true;
             // наложенный платёж — деньги продавца: пункту остаётся комиссия
@@ -2471,6 +2640,7 @@
       if (c.moving || !c.arrived) { msg('Покупатель ещё подходит к стойке…'); return; }
       c.atT = 0;
       if (c.kind === 'guest') { openEgg(c); return; }
+      if (c.kind === 'special') { openSpecial(c); return; }
       if (c.kind === 'pickup') { pickupDialog(c); return; }
       if (c.kind === 'return') { openReturn(c); return; }
       if (c.kind === 'question') { openQuestion(c); return; }
@@ -2479,6 +2649,7 @@
       if (c.kind === 'late') { openLate(c); return; }
       if (c.kind === 'cat_story') { openCatStory(c, 0); return; }
       if (c.kind === 'shady') { openShady(c, 0); return; }
+      if (c.kind === 'npc') { openNpcDialog(c); return; }
       if (c.kind === 'story') { openStory(c, 0); return; }
     }
 
@@ -2488,7 +2659,8 @@
       var mood = sys.mood(c.mood);
       var clothes = order.kind === 'clothes';
       var left = customerOrders(c).length;
-      var text = 'Заказ ' + order.code + ' — «' + order.item + '», ' + U.fmtMoney(order.price) + '. ' +
+      var react = PVZ.serve ? PVZ.serve.itemLine(order) + ' ' : '';
+      var text = react + 'Заказ ' + order.code + ' — «' + order.item + '», ' + U.fmtMoney(order.price) + '. ' +
         (c.codSum ? 'К оплате при получении: ' + U.fmtMoney(c.codSum) + ' (наша комиссия ' + U.fmtMoney(TARIFF.cod) + '). ' : '') +
         (c.docs ? 'Нужно сверить документ. ' : '') +
         (left > 1 ? 'Осталось посылок: ' + left + '. ' : '') +
@@ -2497,25 +2669,45 @@
       if (mood.id === 'chatty') text += ' А я вам сейчас расскажу, как я заказывала…';
 
       var choices = [];
+      // личная история персонажа — главный «крючок» разговора, поэтому она
+      // стоит сразу после выдачи, а не в конце стопки
+      var personal = castTalkChoice(c, function () { openPickupDialog(c); });
       // основное действие
       choices.push({
-        label: left > 1 ? 'Выдать посылку и взяться за следующую' : 'Выдать заказ',
+        label: left > 1 ? 'Отдать товар и взяться за следующую' : 'Отдать товар: ' + order.item,
         hint: '+' + TARIFF.issue + ' ₽ · 1 мин',
         fx: { time: 1 },
         cb: function () {
           var heldOrder = st.held ? orderById(st.held.id) : order;
-          st.held = null;
-          issueParcel(heldOrder, c);
-          var rest = customerOrders(c);
-          if (rest.length) {
-            c.bubble = 'Спасибо! А вторую?';
-            msg('Выдана ' + heldOrder.code + '. У клиента ещё ' + rest.length + ' — заберите со склада.', 'good');
-            openTerminal('found', rest[0]);
-            return;
+          function deliver() {
+            if (!heldOrder || heldOrder.state === 'issued') return;
+            handoffProduct();
+            st.held = null;
+            issueParcel(heldOrder, c);
+            var rest = customerOrders(c);
+            if (rest.length) {
+              c.bubble = 'Спасибо! А вторую?';
+              msg('Выдана ' + heldOrder.code + '. У клиента ещё ' + rest.length + ' — заберите со склада.', 'good');
+              openTerminal('found', rest[0]);
+              return;
+            }
+            finishPickup(c);
           }
-          finishPickup(c);
+          // у каждого товара — своя маленькая сценка: примерка, проверка,
+          // восторг ребёнка, кот в переноске. Игрок реагирует, и выдача
+          // запоминается, а не пролетает одинаково.
+          if (!c.momentDone && PVZ.serve && !(st.tut && st.tut.on)) {
+            var mm = PVZ.serve.momentFor(c, heldOrder);
+            if (mm) {
+              c.momentDone = true;
+              showMoment(c, heldOrder, mm, deliver);
+              return;
+            }
+          }
+          deliver();
         }
       });
+      if (personal) choices.push(personal);
 
       // проверка документа
       if (c.docs) {
@@ -2544,7 +2736,7 @@
       });
 
       // болтовня / торопливость — у каждого свой характер
-      if (mood.id === 'chatty' || mood.id === 'elder' || mood.id === 'vip' || mood.id === 'kid') {
+      if (!personal && (mood.id === 'chatty' || mood.id === 'elder' || mood.id === 'vip' || mood.id === 'kid')) {
         choices.push({
           label: mood.id === 'kid' ? 'Похвалить ребёнка за терпение' : 'Поболтать с покупателем',
           hint: '3 мин · +репутация · +терпение',
@@ -2595,6 +2787,13 @@
         });
       }
 
+      // живой разговор: клиент человек, а не сканер кода.
+      // если вариантов уже много, разговор не добавляем — иначе стопка не влезет
+      if (!personal && choices.length < 6) {
+        var talk = talkChoice(c, function () { openPickupDialog(c); });
+        if (talk) choices.push(talk);
+      }
+
       // отмена
       choices.push({
         label: 'Отмена — клиент подождёт',
@@ -2609,6 +2808,60 @@
         role: 'покупатель',
         mood: c.moodIcon + ' ' + c.moodLabel,
         text: text,
+        choices: choices
+      });
+    }
+
+    /* Микросценка выдачи: товар в руках, покупатель реагирует.
+       Сцена рисуется над диалогом, а выбор игрока задаёт настроение визита. */
+    function showMoment(c, order, m, proceed) {
+      if (!m) { proceed(); return; }
+      st.moment = {
+        kind: m.scene || 'item',
+        person: c,
+        item: order,
+        title: m.title || 'Выдача',
+        subtitle: '«' + order.item + '» · ' + ((c.name || '') + ' ' + (c.last || '')).trim(),
+        t: 0
+      };
+      var choices = m.choices.map(function (ch) {
+        return {
+          label: ch.label,
+          hint: ch.hint || '',
+          fx: ch.fx || null,
+          cb: function () {
+            if (ch.tip) {
+              PVZ.state.addMoney(ch.tip);
+              st.stats.revenue += ch.tip;
+              st.stats.tips += ch.tip;
+              PVZ.audio.coin();
+            }
+            if (ch.queue) {
+              st.queue.forEach(function (q) { q.patience = U.clamp(q.patience + ch.queue, 0.05, 1); });
+            }
+            st.stats.moments = (st.stats.moments || 0) + 1;
+            if (PVZ.state.data) {
+              var sv = PVZ.serve.ensure(PVZ.state.data);
+              sv.moments = (sv.moments || 0) + 1;
+            }
+            st.moment = null;
+            if (c) {
+              c.bubble = ch.reply || 'Спасибо!';
+              c.bubbleAlpha = 0;
+              c.expr = 'happy';
+            }
+            msg(ch.reply || 'Покупатель доволен.', 'good');
+            PVZ.audio.ok();
+            proceed();
+          }
+        };
+      });
+      openDialog({
+        name: (c.name + ' ' + (c.last || '')).trim(),
+        person: c,
+        role: 'выдача · ' + (m.title || 'товар'),
+        mood: c.moodIcon + ' ' + c.moodLabel,
+        text: m.text,
         choices: choices
       });
     }
@@ -2646,6 +2899,11 @@
       }
       if (!st.held.scanned) {
         msg('Сначала отсканируйте посылку — она на столе, сканер слева.', 'bad');
+        return;
+      }
+      if (!st.held.unpacked) {
+        msg('Сначала вскройте коробку и достаньте товар — нажмите на неё на столе.', 'bad');
+        startUnpack();
         return;
       }
       openPickupDialog(c);
@@ -2689,87 +2947,427 @@
       msg('Клиент вернулся из примерочной — ' + c.name + '.', 'info');
     }
 
+    /* Клиент вышел из примерочной. Главное зрелище смены: он показывает,
+       как сидит вещь, поворачивается у зеркала и ждёт вашей реакции. */
     function openFittingBack(c) {
       var o = c.fittingOrder || firstOrderFor(c);
       if (!o) { leaveCustomer(c, true); return; }
-      var took = U.chance(0.6);
+      var fits = U.chance(0.76);
+      if (PVZ.serve) {
+        var col = PVZ.serve.colorFor(o.item, o.kind);
+        c.shirt = col;
+        c.coat = null;
+      }
+      c.expr = 'happy';
+      st.moment = {
+        kind: 'tryon',
+        person: c,
+        item: o,
+        title: 'Примерочная',
+        subtitle: '«' + o.item + '» · ' + ((c.name || '') + ' ' + (c.last || '')).trim(),
+        t: 0
+      };
+      var lookLines = [
+        'Отлично сидит в плечах — и цвет как будто подобрали под вас.',
+        'Посадка ровная, ткань не тянет. Похоже, это ваша вещь.',
+        'Смотрится лучше, чем на картинке в приложении.',
+        'Свободно ровно настолько, чтобы было удобно двигаться.'
+      ];
+      var text = fits
+        ? 'Клиент выходит из примерочной и поворачивается у зеркала: «Ну как? Смотрите, какая посадка!» ' + U.pick(lookLines)
+        : 'Клиент выходит из примерочной, тянет рукав и морщится: «Кажется, маловато. Или это я вырос?»';
+
+      function finishIssue(bonus) {
+        o.state = 'stored';
+        o.cell = o.cellSaved || sys.assignCell(st.orders, o.size);
+        issueParcel(o, c);
+        if (bonus) {
+          PVZ.state.addMoney(bonus);
+          st.stats.revenue += bonus;
+          msg('Клиент доволен примеркой: +' + bonus + ' ₽.', 'good');
+        }
+        giveTip(c);
+        st.moment = null;
+        leaveCustomer(c, true);
+      }
+      function finishReturn() {
+        o.state = 'return';
+        o.customer = null;
+        o.cell = null;
+        st.stats.returns++;
+        st.stats.revenue += TARIFF.ret;
+        PVZ.state.addMoney(TARIFF.ret);
+        PVZ.audio.ok();
+        msg('Возврат оформлен: «' + o.item + '» → зона возвратов. +' + TARIFF.ret + ' ₽', 'good');
+        st.moment = null;
+        leaveCustomer(c, true);
+      }
+      function secondThoughts() {
+        openDialog({
+          name: c.name + ' ' + c.last,
+          person: c,
+          role: 'примерочная',
+          mood: c.moodIcon + ' ' + c.moodLabel,
+          text: 'Клиент смотрит в зеркало ещё раз: «Может, я зря сомневаюсь? Или всё-таки не моё?»',
+          choices: [
+            {
+              label: 'Оформить возврат — клиент всегда прав', hint: 'долго · хороший отзыв',
+              fx: { time: 2, rating: 0.04 },
+              cb: finishReturn
+            },
+            {
+              label: 'Убедить, что вещь сидит лучше, чем кажется', hint: '50/50 · риск',
+              fx: { time: 2, patience: -0.06 },
+              cb: function () {
+                if (U.chance(0.55)) finishIssue(60);
+                else { st.moment = null; leaveCustomer(c, false, 'Клиент всё-таки решил не брать — и обиделся.'); }
+              }
+            }
+          ]
+        });
+      }
+
+      var choices;
+      if (fits) {
+        choices = [
+          {
+            label: 'Сказать: «Сидит идеально, вам очень идёт»', hint: 'недолго · хороший отзыв',
+            fx: { time: 1, rating: 0.05 },
+            cb: function () { finishIssue(40); }
+          },
+          {
+            label: 'Сфотографировать для отзывов', hint: 'недолго · прибыль',
+            fx: { time: 2, rating: 0.06 },
+            cb: function () {
+              c.bubble = 'Снимайте! Только скажите, что это лучший ПВЗ.';
+              finishIssue(80);
+            }
+          },
+          {
+            label: 'Похвалить и предложить пакет', hint: 'быстро · прибыль',
+            fx: { time: 1, money: 60, rating: 0.02 },
+            cb: function () { finishIssue(0); }
+          },
+          {
+            label: 'Честно сказать: «Цвет немного спорный»', hint: 'недолго · риск',
+            fx: { time: 2, rating: -0.02, patience: -0.08 },
+            cb: secondThoughts
+          }
+        ];
+      } else {
+        choices = [
+          {
+            label: 'Принести размер больше', hint: 'долго · хороший отзыв',
+            fx: { time: 4, rating: 0.06 },
+            cb: function () {
+              c.bubble = 'Вот это другое дело! Спасибо, что не отмахнулись.';
+              finishIssue(50);
+            }
+          },
+          {
+            label: 'Оформить возврат: принять товар', hint: 'недолго · хороший отзыв',
+            fx: { time: 2, rating: 0.04 },
+            cb: finishReturn
+          },
+          {
+            label: 'Убедить, что сядет после стирки', hint: '50/50 · −терпение',
+            fx: { time: 2, patience: -0.1 },
+            cb: function () {
+              if (U.chance(0.45)) finishIssue(20);
+              else { st.moment = null; leaveCustomer(c, false, 'Клиент не поверил про стирку и ушёл с жалобой.'); }
+            }
+          },
+          {
+            label: 'Предложить другую модель со склада', hint: 'долго · прибыль',
+            fx: { time: 4, rating: 0.05 },
+            cb: function () { finishIssue(70); }
+          }
+        ];
+      }
       openDialog({
         name: c.name + ' ' + c.last,
         person: c,
         role: 'примерочная',
         mood: c.moodIcon + ' ' + c.moodLabel,
-        text: took
-          ? 'Померил(а) — беру! Спасибо, всё подошло.'
-          : 'Не подошло, к сожалению. Оформим возврат?',
-        choices: took ? [
-          {
-            label: 'Подтвердить выдачу',
-            hint: '+' + TARIFF.issue + ' ₽',
-            fx: { time: 1, rating: 0.03 },
-            cb: function () {
-              o.state = 'stored';
-              o.cell = o.cellSaved || sys.assignCell(st.orders, o.size);
-              issueParcel(o, c);
-              giveTip(c);
-              leaveCustomer(c, true);
-            }
-          },
-          {
-            label: 'Похвалить выбор и предложить пакет',
-            hint: '+60 ₽ · 2 мин',
-            fx: { time: 2, money: 60, rating: 0.02 },
-            cb: function () {
-              o.state = 'stored';
-              o.cell = o.cellSaved || sys.assignCell(st.orders, o.size);
-              issueParcel(o, c);
-              leaveCustomer(c, true);
-            }
-          }
-        ] : [
-          {
-            label: 'Оформить возврат: принять товар',
-            hint: '+' + TARIFF.ret + ' ₽ · 2 мин',
-            fx: { time: 2, rating: 0.04 },
-            cb: function () {
-              o.state = 'return';
-              o.customer = null;
-              o.cell = null;
-              st.stats.returns++;
-              st.stats.revenue += TARIFF.ret;
-              PVZ.state.addMoney(TARIFF.ret);
-              PVZ.audio.ok();
-              msg('Возврат оформлен: «' + o.item + '» → зона возвратов. +' + TARIFF.ret + ' ₽', 'good');
-              leaveCustomer(c, true);
-            }
-          },
-          {
-            label: 'Убедить оставить заказ со скидкой',
-            hint: '50/50 · −терпение',
-            fx: { time: 3, patience: -0.15 },
-            cb: function () {
-              if (U.chance(0.5)) {
-                o.state = 'stored';
-                o.cell = o.cellSaved || sys.assignCell(st.orders, o.size);
-                issueParcel(o, c);
-                leaveCustomer(c, true);
-              } else {
-                leaveCustomer(c, false, 'Клиент ушёл с жалобой.');
-              }
-            }
-          },
-          {
-            label: 'Забрать на склад и оформить потом',
-            hint: '+репутация · 4 мин',
-            fx: { time: 4, rating: 0.03 },
-            cb: function () {
-              o.state = 'return';
-              o.customer = null;
-              o.cell = null;
-              leaveCustomer(c, true);
-            }
-          }
-        ]
+        text: text,
+        choices: choices
       });
+    }
+
+    /* ---------------- особые гости смены ---------------- */
+    /* Витя Гром (2-я смена) — не просто диалог: пока его не успокоили, он
+       кричит на очередь и сносит товар с полок. Остальные особые гости —
+       короткие истории с выбором, за которые дают деньги, рейтинг или
+       добавляют проблем. */
+    function spawnSpecial(def) {
+      if (!def || (st.special && !st.special.done)) return null;
+      var c = sys.makeCustomer();
+      c.kind = 'special';
+      c.specialId = def.id;
+      c.name = def.name;
+      c.last = def.last || '';
+      if (def.look) {
+        Object.keys(def.look).forEach(function (k) {
+          if (def.look[k] != null) c[k] = def.look[k];
+        });
+      }
+      var mo = sys.mood(def.mood || 'calm');
+      c.mood = mo.id;
+      c.moodLabel = def.moodLabel || mo.label;
+      c.moodIcon = def.moodIcon || mo.icon;
+      c.expr = (def.look && def.look.expr) || 'neutral';
+      c.phone = 'none';
+      c.phoneLabel = 'без телефона';
+      c.pay = 'card';
+      c.parcels = 0;
+      c.orderIds = [];
+      c.ask = def.intro || '';
+      c.talon = st.talon++;
+      c.patience = 1;
+      c.patienceRate = (def.danger ? 0.006 : 0.012) * patienceScale(st.day) * (st.mods.patience || 1);
+      c.state = 'queue';
+      c.waitT = 0;
+      c.atT = 0;
+      c.bubble = def.danger ? 'Я вне очереди!' : null;
+      c.bubbleAlpha = 0;
+      c.revealed = true;
+      c.codeScanned = false;
+      c.dictated = false;
+      c.momentDone = true;
+      c.vx = 1240;
+      c.vgy = 488;
+      c.vh = 296 * c.height;
+      c.enterAlpha = 0;
+      c.moving = true;
+      c.arrived = false;
+      c.arrivedT = 0;
+      // двойник: второй такой же гость для сцены
+      if (def.scene === 'duo') {
+        c.specialTwin = art.makePerson({
+          female: false, skin: 1, hair: '#5a4028', style: 'short', shirt: '#8a6a4a',
+          pants: '#3a4048', coat: null, expr: 'confused', glasses: false,
+          hat: null, beard: true, bangs: false, build: 1.04
+        });
+        c.specialTwin.name = def.name;
+        c.specialTwin.last = def.last;
+      }
+      // в зале всего восемь мест: если очередь уже плотная, дальний
+      // покупатель просто уходит, а особый гость всё равно заходит
+      if (st.queue.length >= QUEUE_SLOTS.length) {
+        var over = st.queue.pop();
+        if (over) {
+          over.state = 'leaving';
+          st.leavers.push({ person: over, vx: over.vx, vgy: over.vgy, vh: over.vh, t: 0 });
+        }
+      }
+      if (def.danger) st.queue.unshift(c);
+      else st.queue.push(c);
+      st.special = {
+        id: def.id, def: def, c: c, stage: 'active', t: 0,
+        shoutT: def.danger ? 4.5 : 0,
+        breakT: def.danger ? 9.5 : 0,
+        breaks: 0, done: false
+      };
+      st.specialBanner = 8;
+      st.bellRinging = 1.4;
+      PVZ.audio.bell();
+      if (def.danger) {
+        PVZ.audio.bad();
+        st.smash = { t: 0, x: 985, y: 470, seed: 3 };
+      }
+      msg(def.announce || ('В зал входит ' + c.name + '.'), def.danger ? 'bad' : 'info');
+      st.stats.specials = (st.stats.specials || 0) + 1;
+      if (PVZ.serve) PVZ.serve.markSeen(def.id, st.day);
+      scheduleSpawn();
+      return st.special;
+    }
+
+    function queueFlee(q, why) {
+      if (!q || q.state === 'leaving') return;
+      q.state = 'leaving';
+      q.expr = 'sad';
+      q.bubble = U.pick(['Я лучше в другой раз.', 'Ну и атмосфера у вас.', 'Пойду, пожалуй.']);
+      q.bubbleAlpha = 1;
+      st.leavers.push({ person: q, vx: q.vx, vgy: q.vgy, vh: q.vh, t: 0 });
+      var i = st.queue.indexOf(q);
+      if (i >= 0) st.queue.splice(i, 1);
+      st.stats.complaints++;
+      PVZ.state.rateVisit(2, (st.dayMod.rating || 1) * (st.mods.complaint || 1));
+      PVZ.state.addMoney(-TARIFF.complaint);
+      PVZ.audio.bad();
+      msg(why || 'Клиент не выдержал и ушёл.', 'bad');
+    }
+
+    function rageShout(sp) {
+      var c = sp.c;
+      if (!c || c.state === 'leaving') return;
+      c.bubble = PVZ.serve ? PVZ.serve.shout(sp.def) : 'Безобразие!';
+      c.bubbleAlpha = 0;
+      c.expr = 'angry';
+      st.specialBanner = 3;
+      PVZ.audio.bad();
+      var scared = 0;
+      var flee = null;
+      st.queue.forEach(function (q) {
+        if (q === c) return;
+        q.patience = Math.max(0.05, q.patience - 0.1);
+        scared++;
+        if (!flee && q.patience < 0.4 && U.chance(0.22)) flee = q;
+        else if (U.chance(0.3)) { q.expr = 'sad'; }
+      });
+      if (flee) queueFlee(flee, 'Клиент не выдержал крика и ушёл из очереди.');
+      else if (scared) msg('Гром накричал на очередь — покупатели нервничают.', 'bad');
+    }
+
+    function breakGoods(sp) {
+      var cost = U.ri(90, 240);
+      PVZ.state.addMoney(-cost);
+      st.stats.revenue -= cost;
+      PVZ.state.addRating(-0.02 * (st.mods.rating || 1));
+      sp.breaks = (sp.breaks || 0) + 1;
+      st.smash = { t: 0, x: 960 + U.rand(-40, 40), y: 470 + U.rand(-16, 16), seed: sp.breaks };
+      st.specialBanner = 3;
+      PVZ.audio.bad();
+      msg('Гром снёс коробку с полки: −' + cost + ' ₽ и испорченный товар. Успокойте его!', 'bad');
+    }
+
+    function enrageSpecial(c, reply) {
+      var sp = st.special;
+      var wasDone = !sp || sp.done;
+      if (sp && !sp.done) {
+        sp.done = true;
+        var cost = U.ri(200, 360);
+        PVZ.state.addMoney(-cost);
+        st.stats.revenue -= cost;
+        st.smash = { t: 0, x: 985, y: 468, seed: 9 };
+        st.specialBanner = 0;
+        msg('Гром окончательно разошёлся и снёс полку: −' + cost + ' ₽.', 'bad');
+      }
+      st.moment = null;
+      if (!c) return;
+      c.expr = 'angry';
+      c.bubble = reply || 'Я этого так не оставлю!';
+      c.bubbleAlpha = 0;
+      leaveCustomer(c, false, 'Гром ушёл, разгромив зал.');
+      if (!wasDone) PVZ.state.addRating(-0.08);
+      if (c) { c.bubble = reply || 'Я этого так не оставлю!'; c.bubbleAlpha = 0; }
+    }
+
+    function finishSpecial(c, ok, reply) {
+      var sp = st.special;
+      if (sp && !sp.done) sp.done = true;
+      st.specialBanner = 0;
+      st.moment = null;
+      if (!c) return;
+      if (ok) {
+        PVZ.state.addRating(0.04);
+        msg('Особый гость обслужен — история закрыта.', 'good');
+        leaveCustomer(c, true);
+        if (reply) { c.bubble = reply; c.bubbleAlpha = 0; }
+      } else {
+        leaveCustomer(c, false, 'Особый гость ушёл недовольным.');
+        if (reply) { c.bubble = reply; c.bubbleAlpha = 0; }
+      }
+    }
+
+    function openSpecial(c) {
+      var def = (PVZ.serve && PVZ.serve.specialById(c.specialId)) ||
+        (st.special && st.special.c === c ? st.special.def : null);
+      if (!def) { leaveCustomer(c, true); return; }
+      openSpecialStep(c, def, 0, def.intro || '');
+    }
+
+    function openSpecialStep(c, def, idx, intro) {
+      var step = def.steps[idx];
+      if (!step) { finishSpecial(c, true); return; }
+      var scenePerson = c;
+      st.moment = {
+        kind: def.scene || 'item',
+        person: scenePerson,
+        person2: c.specialTwin || null,
+        item: null,
+        title: def.role || 'особый гость',
+        subtitle: ((def.name || '') + ' ' + (def.last || '')).trim(),
+        t: 0
+      };
+      var choices = step.choices.map(function (ch) {
+        return {
+          label: ch.label,
+          hint: ch.hint || '',
+          fx: ch.fx || null,
+          cb: function () {
+            if (ch.tip) {
+              PVZ.state.addMoney(ch.tip);
+              st.stats.revenue += ch.tip;
+              st.stats.tips += ch.tip;
+              PVZ.audio.coin();
+            }
+            if (ch.queue) {
+              st.queue.forEach(function (q) { q.patience = U.clamp(q.patience + ch.queue, 0.05, 1); });
+            }
+            if (ch.enrage) { enrageSpecial(c, ch.reply); return; }
+            if (ch.peace) { finishSpecial(c, true, ch.reply); return; }
+            var next = ch.next != null ? ch.next : idx + 1;
+            if (ch.roll != null) next = U.chance(ch.roll) ? ch.ok : ch.bad;
+            if (def.steps[next]) openSpecialStep(c, def, next, ch.reply);
+            else finishSpecial(c, true, ch.reply);
+          }
+        };
+      });
+      openDialog({
+        name: ((def.name || '') + ' ' + (def.last || '')).trim(),
+        person: c,
+        role: def.role || 'особый гость',
+        mood: (c.moodIcon || '★') + ' ' + (c.moodLabel || ''),
+        text: (intro ? intro + ' ' : '') + step.text,
+        choices: choices
+      });
+    }
+
+    function updateSpecial(dt) {
+      var sp = st.special;
+      if (!sp || sp.done) return;
+      var c = sp.c;
+      if (!c || c.state === 'leaving') { sp.done = true; return; }
+      if (st.phase !== 'day') return;
+      sp.t += dt;
+      if (sp.def.danger) {
+        sp.shoutT -= dt;
+        sp.breakT -= dt;
+        if (sp.shoutT <= 0) {
+          sp.shoutT = U.rand(6.5, 9.5);
+          rageShout(sp);
+        }
+        if (sp.breakT <= 0) {
+          sp.breakT = U.rand(12, 16);
+          breakGoods(sp);
+        }
+        if (sp.breaks >= 5 && !sp.done) {
+          enrageSpecial(c, 'Всё! Я ухожу, но вы ещё услышите обо мне!');
+          return;
+        }
+      } else if (sp.t > 160) {
+        // гость заждался и уходит без истории
+        finishSpecial(c, false);
+      }
+    }
+
+    function drawSpecialBanner(ctx) {
+      if (!st.special || st.special.done) return;
+      var d = st.special.def;
+      var label = d.danger
+        ? '⚠ ' + d.name + ' ' + (d.last || '') + ' буянит в зале'
+        : '★ ' + d.name + ' ' + (d.last || '') + ' — ' + d.role;
+      var w = Math.min(640, art.txtW(ctx, label, 15, 800) + 50);
+      art.panel(ctx, 640 - w / 2, 78, w, 38, {
+        bg: d.danger ? 'rgba(120,32,22,0.93)' : 'rgba(40,32,24,0.92)',
+        r: 19,
+        border: d.danger ? 'rgba(255,120,70,0.55)' : 'rgba(255,214,150,0.35)'
+      });
+      art.txt(ctx, label, 640, 102, 15, d.danger ? '#ffd0b0' : '#ffe0b0', 800, 'center');
+      if (d.danger) {
+        art.txt(ctx, 'Дождитесь его у стойки и нажмите на него — успокойте', 640, 128, 11, 'rgba(255,214,180,0.75)', 600, 'center');
+      }
     }
 
     function openReturn(c) {
@@ -2827,12 +3425,13 @@
               openReturn(c);
             }
           }
-        ]
+        ].concat(talkChoice(c, function () { openReturn(c); }) || [])
       });
     }
 
-    function openQuestion(c) {
-      var q = sys.makeQuestion();
+    function openQuestion(c, q) {
+      q = q || c.question || sys.makeQuestion();
+      c.question = q;
       var choices = q.opts.map(function (o) {
         return {
           label: o.t,
@@ -2853,6 +3452,8 @@
           }
         };
       });
+      var talk = talkChoice(c, function () { openQuestion(c, q); });
+      if (talk) choices.push(talk);
       openDialog({ name: c.name + ' ' + c.last, person: c, role: 'вопрос', mood: c.moodIcon + ' ' + c.moodLabel, text: q.q, choices: choices });
     }
 
@@ -3304,7 +3905,7 @@
       if (!a) return [];
       a.person.bubble = a.bubble;
       return [{
-        person: a.person, x: a.vx, gy: a.vgy, h: a.vh,
+        person: a.person, x: a.vx, gy: a.vgy, h: a.vh, lift: 0.075,
         walking: a.moving, alpha: a.alpha, bubbleAlpha: a.bubbleAlpha
       }];
     }
@@ -3551,7 +4152,7 @@
               openResolve(c);
             }
           }
-        ]
+        ].concat(talkChoice(c, function () { openResolve(c); }) || [])
       });
     }
 
@@ -3594,8 +4195,189 @@
               leaveCustomer(c, true);
             }
           }
-        ]
+        ].concat(talkChoice(c, function () { openLate(c); }) || [])
       });
+    }
+
+    /* ---------------- забытые посылки ---------------- */
+    /* Те самые коробки, за которыми никто не приходит. Они тикают, мяукают,
+       храпят и пахнут. Разбираться с ними — отдельная маленькая история,
+       которая не мешает основной смене. */
+    function susRect() { return art.LAYOUT.hall.boxes; }
+    function susBoxList() { return PVZ.boxes ? PVZ.boxes.shelf() : []; }
+
+    function adoptBoxCat() {
+      if (PVZ.state.data.cat) {
+        PVZ.state.addMoney(120);
+        st.stats.revenue += 120;
+        msg('Котёнка из коробки пристроили в добрые руки: +120 ₽.', 'good');
+        return;
+      }
+      var name = U.pick(['Коробок', 'Кекс', 'Пломбир', 'Скотч', 'Бублик']);
+      PVZ.state.data.cat = { name: name, fur: U.pick(['ginger', 'gray', 'black', 'white']), takenDay: st.day, petDay: 0 };
+      PVZ.state.data.catStory = 'taken';
+      PVZ.state.save();
+      st.catAnim = { anim: 'happy', t: 0 };
+      PVZ.audio.level();
+      msg('Котёнок из коробки остался на ПВЗ. Его зовут ' + name + '.', 'good');
+    }
+
+    function applyBoxResult(out) {
+      var fx = (out && out.fx) || {};
+      if (fx.money) {
+        PVZ.state.addMoney(fx.money);
+        if (fx.money > 0) { st.stats.revenue += fx.money; PVZ.audio.coin(); }
+        else PVZ.audio.bad();
+      }
+      if (fx.rating) PVZ.state.addRating(fx.rating * (fx.rating > 0 ? (st.mods.rating || 1) : 1));
+      if (fx.heat) PVZ.state.bananaHeat(fx.heat);
+      if (fx.proof) PVZ.state.mafiaAdd('proof', fx.proof);
+      if (fx.cat) adoptBoxCat();
+      if (fx.patience) {
+        st.queue.forEach(function (q) { q.patience = U.clamp(q.patience + fx.patience, 0.08, 1); });
+        if (st.customer) st.customer.patience = U.clamp(st.customer.patience + fx.patience, 0.08, 1);
+      }
+      st.stats.boxes = PVZ.boxes ? PVZ.boxes.count() : 0;
+    }
+
+    function openBoxFor(box) {
+      if (!PVZ.boxes) return;
+      var list = susBoxList();
+      if (!list.length) { msg('Полка забытых посылок пуста — разобрались со всеми.', 'good'); return; }
+      if (!box || list.indexOf(box) < 0) box = list[Math.min(st.boxIdx || 0, list.length - 1)] || list[0];
+      var kind = PVZ.boxes.kind(box.kind);
+      var boxNum = String(box.id || '').replace(/^sb/, '') || '?';
+      var text = 'Коробка №' + boxNum + ' — ' + kind.name + '. ' + PVZ.boxes.description(box);
+      var choices = [];
+      choices.push({
+        label: 'Осмотреть и послушать',
+        hint: '2 мин · без риска',
+        fx: { time: 2 },
+        cb: function () {
+          PVZ.boxes.study(box);
+          openBoxFor(box);
+        }
+      });
+      choices.push({
+        label: 'Вскрыть коробку',
+        hint: '4 мин · риск и любопытство',
+        cb: function () { resolveBox(box, 'open'); }
+      });
+      choices.push({
+        label: 'Позвонить по накладной',
+        hint: '3 мин · вдруг получится',
+        cb: function () { resolveBox(box, 'call'); }
+      });
+      choices.push({
+        label: 'Написать заявление в полицию',
+        hint: '3 мин · по-честному',
+        cb: function () { resolveBox(box, 'report'); }
+      });
+      if (list.length > 1) {
+        choices.push({
+          label: 'Следующая посылка',
+          hint: 'в стопке ещё ' + (list.length - 1),
+          cb: function () {
+            st.boxIdx = (list.indexOf(box) + 1) % list.length;
+            openBoxFor(list[st.boxIdx]);
+          }
+        });
+      }
+      choices.push({ label: 'Оставить как есть', hint: 'пусть стоит' });
+      openDialog({
+        name: 'Забытые посылки',
+        icon: kind.icon,
+        role: 'полка в зале · ' + list.length + ' шт.',
+        mood: 'получатель не приходит',
+        text: text,
+        choices: choices
+      });
+      PVZ.audio.ui();
+    }
+
+    function resolveBox(box, action) {
+      if (!PVZ.boxes) return;
+      var kind = PVZ.boxes.kind(box.kind);
+      var out = PVZ.boxes.resolve(box, action);
+      if (!out) { msg('С этой коробкой уже разобрались.', 'info'); return; }
+      st.clock = Math.max(0, st.clock + (action === 'open' ? 4 : 3) * (st.mods.time || 1));
+      applyBoxResult(out);
+      PVZ.audio.ok();
+      openDialog({
+        name: 'Забытые посылки',
+        icon: kind.icon,
+        role: out.title,
+        mood: box.status === 'opened' ? 'вскрыто' : box.status === 'sent' ? 'получатель найден' : 'передано в полицию',
+        text: out.text,
+        choices: [{
+          label: 'Вернуться к работе',
+          hint: PVZ.boxes.count() ? 'на полке осталось: ' + PVZ.boxes.count() : 'полка пуста',
+          cb: function () {
+            if (PVZ.boxes.count()) msg('Забытых посылок на полке: ' + PVZ.boxes.count() + '.', 'info');
+          }
+        }]
+      });
+      PVZ.state.save();
+    }
+
+    function drawSuspicious(ctx) {
+      if (!PVZ.boxes) return;
+      var list = susBoxList();
+      if (!list.length) return;
+      var bx = susRect();
+      var n = Math.min(4, list.length);
+      var place = [
+        { x: bx.x + 2, y: bx.y + 52, w: 100, h: 70 },
+        { x: bx.x + 106, y: bx.y + 60, w: 92, h: 62 },
+        { x: bx.x + 26, y: bx.y + 2, w: 88, h: 64 },
+        { x: bx.x + 98, y: bx.y + 6, w: 76, h: 54 }
+      ];
+      for (var i = 0; i < n; i++) {
+        var p = place[i];
+        var ph = (st.susPing && list[i] && st.susPing.id === list[i].id) ? Math.sin(st.t * 22) * 3 : Math.sin(st.t * 1.6 + i) * 1.2;
+        ctx.save();
+        ctx.translate(0, ph);
+        art.drawParcel(ctx, p.x, p.y, p.w, p.h, { seed: i + 3, rot: i % 2 ? 0.03 : -0.02 });
+        // красный скотч крест-накрест: такие коробки лучше не трогать
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        ctx.strokeStyle = i === 0 ? '#d24b3a' : '#c9a227';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(p.x + 8, p.y + 8);
+        ctx.lineTo(p.x + p.w - 8, p.y + p.h - 8);
+        ctx.moveTo(p.x + p.w - 8, p.y + 8);
+        ctx.lineTo(p.x + 8, p.y + p.h - 8);
+        ctx.stroke();
+        ctx.restore();
+        // бирка «получатель не найден»
+        art.fillRR(ctx, p.x + 6, p.y + p.h - 18, p.w - 12, 14, 3, 'rgba(255,248,235,0.9)');
+        art.txt(ctx, 'НЕ ВСКРЫВАТЬ', p.x + p.w / 2, p.y + p.h - 8, 6.5, '#8a2a1e', 800, 'center');
+        ctx.restore();
+      }
+      // значок «?» над стопкой
+      var top = place[Math.max(0, n - 1)];
+      var wob = Math.sin(st.t * 2.2) * 2;
+      art.txt(ctx, '?', top.x + top.w / 2, top.y - 12 + wob, 24, '#ffb27a', 800, 'center');
+      // счётчик
+      var badge = { x: bx.x + 6, y: bx.y + 4, w: 122, h: 24 };
+      art.fillRR(ctx, badge.x, badge.y, badge.w, badge.h, 12, 'rgba(40,26,18,0.82)');
+      art.txt(ctx, 'ЗАБЫТЫЕ: ' + list.length, badge.x + badge.w / 2, badge.y + 16, 11, '#ffd8a8', 800, 'center');
+      // звуковые волны, когда коробка «подаёт голос»
+      if (st.susPing) {
+        var t = st.susPing.t || 0;
+        for (var w = 0; w < 3; w++) {
+          var rr = 18 + ((t * 42 + w * 16) % 52);
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, 0.5 - (rr - 18) / 104);
+          ctx.strokeStyle = '#ffb27a';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(top.x + top.w / 2, top.y + top.h / 2, rr, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
     }
 
     /* ---------------- пасхалка: гость из другого мира ---------------- */
@@ -3687,6 +4469,293 @@
 
     function openDialog(opts) {
       st.dlg = new sys.Dialogue(opts);
+      // разговор с мафией сразу перебивает радио страшной темой
+      if (opts && opts.scary && PVZ.music && PVZ.music.snapMood) PVZ.music.snapMood('scary');
+    }
+
+    /* ---------------- живые разговоры у стойки ---------------- */
+    /* Любой покупатель может поболтать: две реплики, выбор игрока,
+       ответ клиента. Темы и тексты лежат в talks.js. */
+    function talkChoice(c, resume) {
+      if (!c) return null;
+      // сначала — личная история персонажа, общие темы остаются на потом
+      var personal = castTalkChoice(c, resume);
+      if (personal) return personal;
+      if (!PVZ.talks) return null;
+      var topic = c.talkTopic || PVZ.talks.pickTopic(PVZ.state.data);
+      if (!topic) return null;
+      c.talkTopic = topic;
+      return {
+        label: 'Поболтать: ' + topic.title,
+        hint: 'разговор · 2–4 мин',
+        cb: function () {
+          PVZ.talks.markTopic(PVZ.state.data, topic.id);
+          PVZ.state.save();
+          PVZ.audio.ui();
+          openTalk(c, topic, 0, topic.open, resume);
+        }
+      };
+    }
+
+    /* ---- личная история постоянного персонажа ---- */
+    function castTalkChoice(c, resume) {
+      if (!c || !c.castId || !PVZ.cast || !PVZ.state.data) return null;
+      var ch = PVZ.cast.byId(c.castId);
+      if (!ch) return null;
+      var beat = c.castBeat || PVZ.cast.nextBeat(ch, PVZ.state.data);
+      if (!beat) return null;
+      c.castBeat = beat;
+      var rel = PVZ.cast.rel(ch.id);
+      return {
+        label: 'Поговорить: ' + beat.title,
+        hint: ch.role + ' · ' + PVZ.cast.relLabel(rel),
+        cb: function () {
+          PVZ.audio.ui();
+          openCastBeat(c, ch, beat, 0, beat.open, resume);
+        }
+      };
+    }
+
+    function castFx(fx) {
+      if (!fx) return;
+      if (fx.heat) PVZ.state.bananaHeat(fx.heat);
+      if (fx.proof) PVZ.state.mafiaAdd('proof', fx.proof);
+    }
+
+    function openCastBeat(c, ch, beat, stage, text, resume) {
+      var step = beat.steps[stage];
+      if (!step) { finishCastBeat(c, ch, beat, text, resume); return; }
+      var choices = step.choices.map(function (pick) {
+        return {
+          label: pick.t,
+          hint: pick.hint || '',
+          fx: pick.fx,
+          cb: function () {
+            if (pick.rel) PVZ.cast.addRel(ch.id, pick.rel);
+            castFx(pick.fx);
+            var next = stage + 1;
+            if (next < beat.steps.length) openCastBeat(c, ch, beat, next, pick.reply, resume);
+            else finishCastBeat(c, ch, beat, pick.reply, resume);
+          }
+        };
+      });
+      openDialog({
+        name: ch.name + ' ' + (ch.last || ''),
+        person: c,
+        role: ch.role,
+        mood: c.moodIcon + ' ' + c.moodLabel,
+        text: text,
+        choices: choices
+      });
+    }
+
+    function finishCastBeat(c, ch, beat, reply, resume) {
+      if (!c.castBeatDone) {
+        c.castBeatDone = true;
+        c.expr = 'happy';
+        PVZ.cast.markBeat(ch.id, beat.id, PVZ.state.data);
+        var reward = beat.reward || {};
+        if (reward.rating) PVZ.state.addRating(reward.rating * (st.mods.rating || 1));
+        if (reward.money) {
+          PVZ.state.addMoney(reward.money);
+          st.stats.revenue += reward.money;
+        }
+      }
+      var fin = PVZ.cast.finishBeat(c, ch, beat, PVZ.state.data);
+      var extra = '';
+      if (fin.number) {
+        extra = ' Кстати, вот мой номер — записывайте: ' + ch.name + ' теперь есть в «Мессенджере».';
+        msg(ch.name + ' оставил(а) свой номер телефона. Контакт появился в «Мессенджере».', 'good');
+        PVZ.audio.level();
+      }
+      if (fin.referral) {
+        st.refQueue.push({ charId: fin.referral.char.id, by: fin.referral.by });
+        msg(fin.referral.by + ' расскажет о вашем ПВЗ знакомым. Ждите нового человека — по рекомендации.', 'good');
+      }
+      openDialog({
+        name: ch.name + ' ' + (ch.last || ''),
+        person: c,
+        role: ch.role,
+        mood: c.moodIcon + ' ' + c.moodLabel,
+        text: reply + (beat.end ? ' ' + beat.end : '') + extra,
+        choices: [{
+          label: 'Вернуться к работе',
+          hint: fin.number ? 'номер сохранён' : 'разговор сблизил',
+          cb: function () { if (resume) resume(); }
+        }]
+      });
+      PVZ.state.save();
+    }
+
+    function openTalk(c, topic, stage, text, resume) {
+      var step = topic.steps[stage];
+      if (!step) { openTalkEnd(c, topic, text, resume); return; }
+      var choices = step.choices.map(function (ch) {
+        return {
+          label: ch.t,
+          hint: ch.hint || '',
+          fx: ch.fx,
+          cb: function () {
+            var next = stage + 1;
+            if (next < topic.steps.length) openTalk(c, topic, next, ch.reply, resume);
+            else openTalkEnd(c, topic, ch.reply, resume);
+          }
+        };
+      });
+      openDialog({
+        name: c.name + ' ' + c.last,
+        person: c,
+        role: 'покупатель · ' + (topic.cat || 'разговор'),
+        mood: c.moodIcon + ' ' + c.moodLabel,
+        text: text,
+        choices: choices
+      });
+    }
+
+    function openTalkEnd(c, topic, reply, resume) {
+      if (!c.talkDone) {
+        c.talkDone = true;
+        c.expr = 'happy';
+        var reward = topic.reward || {};
+        if (reward.rating) PVZ.state.addRating(reward.rating * (st.mods.rating || 1));
+        if (reward.money) { PVZ.state.addMoney(reward.money); st.stats.revenue += reward.money; }
+        PVZ.state.save();
+      }
+      openDialog({
+        name: c.name + ' ' + c.last,
+        person: c,
+        role: 'покупатель',
+        mood: c.moodIcon + ' ' + c.moodLabel,
+        text: reply + (topic.end ? ' ' + topic.end : ''),
+        choices: [{
+          label: 'Вернуться к работе',
+          hint: 'разговор сблизил',
+          cb: function () { if (resume) resume(); }
+        }]
+      });
+    }
+
+    /* ---------------- сюжетные покупатели ---------------- */
+    function npcById(id) { return PVZ.talks ? PVZ.talks.npcById(id) : null; }
+
+    function spawnStoryNpc(npc, beat) {
+      if (!npc) return;
+      var c = sys.makeCustomer({ female: !!npc.person.female });
+      Object.keys(npc.person).forEach(function (k) { if (npc.person[k] != null) c[k] = npc.person[k]; });
+      c.name = npc.name;
+      c.last = '';
+      c.kind = 'npc';
+      c.npcId = npc.id;
+      c.npcBeat = beat;
+      c.mood = 'calm';
+      c.moodLabel = npc.role;
+      c.moodIcon = '✎';
+      c.expr = 'neutral';
+      c.phone = 'smart';
+      c.phoneLabel = 'смартфон';
+      c.pay = 'card';
+      c.ask = '…';
+      c.orderIds = [];
+      c.parcels = 0;
+      c.talon = st.talon++;
+      c.patience = 1;
+      // сюжетный гость ждёт долго, но не бесконечно
+      c.patienceRate = 0.0035;
+      c.state = 'queue';
+      c.waitT = 0;
+      c.atT = 0;
+      c.bubble = U.pick(['Есть разговор.', 'Здравствуйте. На пару слов?', 'Можно вас на минуту?']);
+      c.bubbleAlpha = 0;
+      c.revealed = true;
+      c.codeScanned = false;
+      c.dictated = false;
+      c.codeEntered = false;
+      c.wantsFitting = false;
+      c.fittingDone = false;
+      c.paid = false;
+      c.codSum = 0;
+      c.docs = false;
+      c.reviewed = true;
+      c.vx = 1240;
+      c.vgy = 488;
+      c.vh = 296 * c.height;
+      c.enterAlpha = 0;
+      c.moving = true;
+      c.arrived = false;
+      c.arrivedT = 0;
+      st.queue.push(c);
+      st.bellRinging = 1.2;
+      PVZ.audio.bell();
+      var d = PVZ.state.data;
+      if (d) {
+        if (!d.npcSpawnDay || typeof d.npcSpawnDay !== 'object') d.npcSpawnDay = {};
+        d.npcSpawnDay[npc.id] = st.day;
+        PVZ.state.save();
+      }
+      msg(npc.name + ' зашёл поговорить: «' + (beat ? beat.title : 'по делу') + '». Нажмите на него у стойки.', 'info');
+    }
+
+    function openNpcDialog(c) {
+      var npc = npcById(c.npcId);
+      if (!npc) { leaveNpc(c); return; }
+      if (c.npcBeatDone) {
+        openDialog({
+          name: npc.name, person: c, role: npc.role, mood: '✎ уже поговорили',
+          text: 'Спасибо, что выслушали. Я пойду, а вы работайте — у вас смена.',
+          choices: [{ label: 'Попрощаться', hint: '', cb: function () { leaveNpc(c); } }]
+        });
+        return;
+      }
+      var beat = c.npcBeat || PVZ.talks.nextBeat(npc, PVZ.state.data) || PVZ.talks.genericBeat(npc, st.day);
+      if (!beat) { leaveNpc(c); return; }
+      c.npcBeat = beat;
+      var choices = beat.choices.map(function (ch) {
+        return {
+          label: ch.t,
+          hint: ch.hint || '',
+          fx: ch.fx,
+          cb: function () {
+            if (ch.mafia) {
+              if (ch.mafia.trust) PVZ.state.mafiaAdd('trust', ch.mafia.trust);
+              if (ch.mafia.dirt) PVZ.state.mafiaAdd('dirt', ch.mafia.dirt);
+              if (ch.mafia.proof) PVZ.state.mafiaAdd('proof', ch.mafia.proof);
+            }
+            if (!beat.idle) PVZ.talks.markBeat(npc.id, beat.id);
+            if (ch.unlock) {
+              PVZ.talks.unlockContact(npc.id);
+              msg((ch.note || (npc.name + ' оставил номер телефона.')) + ' Теперь он есть в «Мессенджере».', 'good');
+            } else if (ch.note) {
+              msg(ch.note, 'good');
+            }
+            c.npcBeatDone = true;
+            c.expr = 'happy';
+            PVZ.audio.ok();
+            openDialog({
+              name: npc.name, person: c, role: npc.role, mood: '✎ ' + beat.title,
+              text: ch.reply,
+              choices: [{ label: 'Вернуться к работе', hint: 'разговор закончен', cb: function () { leaveNpc(c); } }]
+            });
+          }
+        };
+      });
+      openDialog({ name: npc.name, person: c, role: npc.role, mood: '✎ ' + beat.title, text: beat.text, choices: choices });
+      PVZ.audio.ui();
+    }
+
+    /* Сюжетный гость уходит без оценки и без отзыва: он приходил не за посылкой */
+    function leaveNpc(c) {
+      if (!c) return;
+      c.bubble = U.pick(['Спасибо. Я ещё зайду.', 'Понял. Держитесь.', 'Хорошо. Не пропадайте.']);
+      c.bubbleAlpha = 1;
+      c.reviewed = true;
+      c.state = 'leaving';
+      st.leavers.push({ person: c, vx: c.vx, vgy: c.vgy, vh: c.vh, t: 0 });
+      if (st.customer === c) { st.customer = null; st.nextT = 1.4; }
+      else {
+        var i = st.queue.indexOf(c);
+        if (i >= 0) st.queue.splice(i, 1);
+      }
+      st.held = null;
     }
 
     /* ---------------- телефон покупателя + сканер ---------------- */
@@ -3773,6 +4842,7 @@
         sub: c.phone === 'paper' ? 'Наведите сканер на бумажку с кодом' : 'Наведите сканер на штрихкод в телефоне',
         hard: c.phone === 'old' || c.phone === 'paper',
         onDone: function (ok) {
+          if (c.state === 'leaving') return;
           if (ok) {
             c.codeScanned = true;
             c.expr = 'happy';
@@ -3993,7 +5063,10 @@
         msg('В руках уже ' + st.held.code + '. Сначала положите её на стол и выдайте.', 'bad');
         return;
       }
-      st.held = { id: order.id, code: order.code, item: order.item, scanned: false, onTable: false };
+      st.held = {
+        id: order.id, code: order.code, item: order.item, kind: order.kind, size: order.size,
+        scanned: false, onTable: false, unpacked: false, placeT: 0
+      };
       PVZ.audio.ok();
       PVZ.state.addMinutes(1);
       st.targetCell = null;
@@ -4016,19 +5089,20 @@
       }
     }
 
-    /* Посылка из ячейки сначала ложится на стол: сканировать на весу нельзя */
+    /* Посылка из ячейки сначала ложится на стол: вскрывать на весу нельзя */
     function placeHeldOnDesk() {
       var h = st.held;
       if (!h) { msg('В руках нет посылки. Возьмите её на складе.', 'bad'); return; }
       if (h.onTable) { return; }
       h.onTable = true;
+      h.placeT = 0;
       PVZ.audio.click();
       PVZ.state.addMinutes(1);
       if (PVZ.state.mods().autoScan) {
         h.scanned = true;
-        msg('Посылка ' + h.code + ' на столе. Браслет уже считал штрихкод — отдавайте заказ.', 'good');
+        msg('Посылка ' + h.code + ' на столе. Браслет уже считал штрихкод — вскройте коробку ножом.', 'good');
       } else {
-        msg('Посылка ' + h.code + ' на столе. Теперь возьмите сканер и нажмите на коробку.', 'good');
+        msg('Посылка ' + h.code + ' на столе. Возьмите сканер слева и отсканируйте штрихкод.', 'good');
       }
     }
 
@@ -4037,12 +5111,16 @@
       var h = st.held;
       if (!h) { msg('На столе нет посылки.', 'bad'); return; }
       if (!h.onTable) { msg('Сначала положите посылку на стол — на свободное место слева.', 'bad'); return; }
+      if (h.scanned) {
+        if (!h.unpacked) startUnpack();
+        else msg('Товар уже достали — отдавайте его покупателю.', 'info');
+        return;
+      }
       if (!st.scannerHeld) {
         PVZ.audio.bad();
         msg('Сканер лежит слева на столе — сначала возьмите его.', 'bad');
         return;
       }
-      if (h.scanned) { msg('Штрихкод уже считан. Отдавайте заказ.'); return; }
       startQTE({
         type: 'scan',
         code: h.code,
@@ -4054,7 +5132,7 @@
             st.held.scanned = true;
             PVZ.audio.scanOk();
             PVZ.state.addMinutes(1);
-            msg('Штрихкод посылки считан: ' + h.code + '. Отдайте заказ покупателю.', 'good');
+            msg('Штрихкод посылки считан: ' + h.code + '. Теперь нажмите на коробку и вскройте её.', 'good');
           } else {
             PVZ.audio.scanFail();
             PVZ.state.addMinutes(1);
@@ -4064,6 +5142,221 @@
         }
       });
     }
+
+    /* ---------------- вскрытие посылки: нож → пакет → товар ---------------- */
+    /* Сцена-крупный план: игрок наклоняется к коробке, ведёт ножом по скотчу,
+       ножницами разрезает пакет и достаёт настоящий товар из заказа. */
+    var UNPACK_RECT = {
+      knife: { x: 882, y: 404, w: 236, h: 132 },
+      scissors: { x: 152, y: 404, w: 236, h: 132 },
+      tape: { x: 390, y: 262, w: 500, h: 108 },
+      bag: { x: 498, y: 196, w: 284, h: 176 },
+      product: { x: 497, y: 165, w: 286, h: 286 },
+      close: { x: 24, y: 24, w: 44, h: 44 }
+    };
+
+    function startUnpack() {
+      var h = st.held;
+      if (!h) { msg('В руках нет посылки. Возьмите её на складе.', 'bad'); return; }
+      if (!h.onTable) { msg('Сначала положите посылку на стол.', 'bad'); return; }
+      if (!h.scanned) { msg('Сначала отсканируйте штрихкод — сканер лежит слева на столе.', 'bad'); return; }
+      if (h.unpacked) { msg('Товар уже достали — отдавайте его покупателю.', 'info'); return; }
+      if (st.unpack) return;
+      if (st.dlg || st.qte || st.terminal || st.laptop || st.phone) return;
+      st.unpack = {
+        t: 0,
+        phase: 'lean',
+        lean: 0,
+        tool: null,
+        progress: 0,
+        open: 0,
+        openT: 0,
+        snips: 0,
+        bagShow: 0,
+        product: 0,
+        pull: 0,
+        snipCd: 0,
+        cutting: false,
+        hx: 640,
+        hy: 318,
+        lastX: 640,
+        lastY: 318,
+        code: h.code,
+        item: h.item,
+        kind: h.kind
+      };
+      // если сцену уже открывали и закрыли — продолжаем с того же места
+      var prev = h.unpackState;
+      if (prev) {
+        st.unpack.progress = prev.progress || 0;
+        st.unpack.open = prev.open || 0;
+        st.unpack.openT = st.unpack.open;
+        st.unpack.bagShow = st.unpack.open > 0.55 ? 1 : 0;
+        st.unpack.snips = prev.snips || 0;
+        if (st.unpack.open >= 1) {
+          if (st.unpack.snips >= 3) { st.unpack.phase = 'product'; st.unpack.product = 1; }
+          else st.unpack.phase = 'scissorsIdle';
+        } else {
+          st.unpack.phase = 'knifeIdle';
+        }
+      }
+      PVZ.audio.ui();
+      msg('Коробка ' + h.code + ' на столе. Нож — справа, ножницы — слева.', 'info');
+    }
+
+    function closeUnpack() {
+      if (!st.unpack) return;
+      var u = st.unpack;
+      var h = st.held;
+      if (h && h.code === u.code) {
+        h.unpackState = { progress: u.progress, open: u.open, snips: u.snips };
+      }
+      st.unpack = null;
+      PVZ.audio.click();
+      msg('Коробка осталась на столе. Вскрыть её можно в любой момент.', 'info');
+    }
+
+    function pickUnpackTool(tool) {
+      var u = st.unpack;
+      if (!u) return;
+      u.tool = tool;
+      u.phase = tool === 'knife' ? 'cut' : 'bagCut';
+      u.snipCd = 0;
+      PVZ.audio.tap();
+      if (tool === 'knife') msg('Нож в руке. Проведите им по скотчу на крышке коробки.', 'info');
+      else msg('Ножницы в руке. Разрежьте пакет — три надреза.', 'info');
+    }
+
+    function unpackSnip() {
+      var u = st.unpack;
+      if (!u || u.phase !== 'bagCut' || u.snipCd > 0) return;
+      u.snips = Math.min(3, u.snips + 1);
+      u.snipCd = 0.24;
+      PVZ.audio.snip();
+      if (u.snips >= 3) {
+        u.phase = 'product';
+        u.product = 0.001;
+        PVZ.audio.ok();
+        msg('Пакет разрезан. Достаньте «' + u.item + '».', 'good');
+      }
+    }
+
+    function unpackPullProduct() {
+      var u = st.unpack;
+      if (!u || u.phase !== 'product') return;
+      u.phase = 'pull';
+      u.pull = 0;
+      PVZ.audio.tap();
+    }
+
+    function unpackFinish() {
+      var u = st.unpack;
+      if (!u) return;
+      var h = st.held;
+      if (h && h.code === u.code) {
+        h.unpacked = true;
+        h.boxOpen = true;
+        h.unpackState = null;
+      }
+      st.unpack = null;
+      PVZ.state.addMinutes(2);
+      PVZ.audio.level();
+      msg('«' + u.item + '» у вас в руках. Отдайте товар покупателю.', 'good');
+    }
+
+    function unpackTap(x, y) {
+      var u = st.unpack;
+      if (!u) return;
+      if (U.hit(UNPACK_RECT.close, x, y)) { closeUnpack(); return; }
+      if (u.phase === 'lean') { u.lean = Math.max(u.lean, 0.55); return; }
+      if (u.phase === 'knifeIdle' && U.hit(UNPACK_RECT.knife, x, y)) { pickUnpackTool('knife'); return; }
+      if (u.phase === 'scissorsIdle' && U.hit(UNPACK_RECT.scissors, x, y)) { pickUnpackTool('scissors'); return; }
+      if (u.phase === 'cut') {
+        msg('Зажмите и проведите ножом по скотчу слева направо.', 'info');
+        return;
+      }
+      if (u.phase === 'bagCut') {
+        if (U.hit(UNPACK_RECT.bag, x, y)) unpackSnip();
+        else msg('Режьте пакет внутри коробки — по центру.', 'info');
+        return;
+      }
+      if (u.phase === 'product' && U.hit(UNPACK_RECT.product, x, y)) { unpackPullProduct(); return; }
+    }
+
+    function unpackDown(x, y) {
+      var u = st.unpack;
+      if (!u) return;
+      if (u.phase === 'cut' && U.hit(UNPACK_RECT.tape, x, y)) {
+        u.cutting = true;
+        u.lastX = x;
+        u.lastY = y;
+      }
+    }
+
+    function unpackMove(x, y) {
+      var u = st.unpack;
+      if (!u || !u.cutting || u.phase !== 'cut') return;
+      if (U.hit(UNPACK_RECT.tape, x, y)) {
+        u.progress = Math.min(1, u.progress + (Math.abs(x - u.lastX) + Math.abs(y - u.lastY) * 0.4) / 700);
+      }
+      u.lastX = x;
+      u.lastY = y;
+    }
+
+    function unpackUp() {
+      var u = st.unpack;
+      if (!u) return;
+      u.cutting = false;
+    }
+
+    function unpackUpdate(dt) {
+      var u = st.unpack;
+      if (!u) return;
+      u.t += dt;
+      if (u.snipCd > 0) u.snipCd -= dt;
+      var leanTarget = u.phase === 'lean' ? 0.55 : 1;
+      u.lean = U.approach(u.lean, leanTarget, 3.4, dt);
+
+      if (u.phase === 'lean' && u.t > 0.9) {
+        u.phase = 'knifeIdle';
+        PVZ.audio.ui();
+      }
+
+      if (u.phase === 'cut') {
+        var holdCut = u.cutting && PVZ.input.down;
+        var keyCut = PVZ.input.keys[' '] || PVZ.input.keys['Enter'];
+        if (holdCut) u.progress = Math.min(1, u.progress + dt * 0.65);
+        if (keyCut) u.progress = Math.min(1, u.progress + dt * 0.95);
+        u.hx = U.approach(u.hx, 430 + 420 * u.progress, 9, dt);
+        u.hy = U.approach(u.hy, 318, 9, dt);
+        if (u.progress >= 1) {
+          u.phase = 'opening';
+          u.openT = 0;
+          u.cutting = false;
+          u.tool = null;
+          PVZ.audio.cut();
+          PVZ.state.addMinutes(1);
+          msg('Скотч прорезан — раскрываем коробку.', 'good');
+        }
+      } else if (u.phase === 'opening') {
+        u.openT += dt;
+        u.open = Math.min(1, u.openT / 0.75);
+        if (u.open >= 1) {
+          u.phase = 'scissorsIdle';
+          PVZ.audio.ui();
+        }
+      } else if (u.phase === 'bagCut') {
+        u.hx = U.approach(u.hx, U.clamp(PVZ.input.x, 520, 800), 8, dt);
+        u.hy = U.approach(u.hy, U.clamp(PVZ.input.y, 220, 330), 8, dt);
+      } else if (u.phase === 'product') {
+        u.product = Math.min(1, u.product + dt * 2.1);
+      } else if (u.phase === 'pull') {
+        u.pull = Math.min(1, u.pull + dt / 0.7);
+        if (u.pull >= 1) unpackFinish();
+      }
+      if (u.open > 0.55) u.bagShow = Math.min(1, u.bagShow + dt * 2.4);
+    }
+
 
     /* Клик по сканеру: сначала берём его в руку, потом сканируем им то, что на столе */
     function scanHeld() {
@@ -4397,6 +5690,11 @@
       if (id === 'banana') { L.mode = 'banana'; if (!L.banana) L.banana = { tab: 'buy' }; return; }
       if (id === 'premium') { L.mode = 'premium'; if (!L.premium) L.premium = { tab: 'bundles', modal: null, ad: null, msg: '', msgT: 0 }; return; }
       if (id === 'appstore') { L.mode = 'appstore'; L.appstore.tab = 'all'; L.appstore.page = 0; return; }
+      if (id === 'chat') {
+        L.mode = 'chat';
+        if (PVZ.talks && PVZ.talks.ensureThread) PVZ.talks.ensureThread(L.chatWith || 'artem');
+        return;
+      }
       // остальные программы рисуются общим экраном
       L.mode = id;
     }
@@ -4488,6 +5786,11 @@
       // Premium store зовёт скидкой, пока не куплен стартовый набор
       if (a.id === 'premium' && !PVZ.state.premiumHas('starter')) {
         return { text: '−84%', color: '#e4572e', w: 44 };
+      }
+      // непрочитанные переписки: живые люди ждут ответа
+      if (a.id === 'chat') {
+        var pend = (PVZ.talks && PVZ.talks.pendingCount) ? PVZ.talks.pendingCount(PVZ.state.data) : 0;
+        return pend ? { text: String(Math.min(9, pend)), color: '#5b7fd0' } : null;
       }
       return null;
     }
@@ -4591,6 +5894,19 @@
       ctx.save();
       ctx.fillStyle = 'rgba(8,5,4,0.74)';
       ctx.fillRect(0, 0, 1280, 720);
+
+      // ноутбук не останавливает ожидание — показываем, кто ждёт в зале
+      if (st.customer && st.phase === 'day' && st.shiftOpen) {
+        var waitC = st.customer;
+        art.panel(ctx, 24, 16, 302, 52, { bg: 'rgba(30,22,18,0.94)', r: 12, border: 'rgba(255,200,150,0.2)' });
+        art.txt(ctx, waitC.state === 'leaving' ? 'Покупатель ушёл' : 'Покупатель ждёт',
+          38, 37, 12, waitC.state === 'leaving' ? '#ff8a5c' : 'rgba(255,240,220,0.7)', 700);
+        if (st.queue.length) {
+          art.txt(ctx, 'в очереди: ' + st.queue.length, 312, 37, 11, 'rgba(255,240,220,0.45)', 700, 'right');
+        }
+        art.bar(ctx, 38, 46, 274, 8, waitC.state === 'leaving' ? 0 : U.clamp(waitC.patience, 0, 1),
+          waitC.patience > 0.55 ? '#5aa877' : waitC.patience > 0.3 ? '#f2c14a' : '#e4572e');
+      }
 
       if (L.mode === 'shop') {
         L.shop.draw(ctx, st.t);
@@ -4904,6 +6220,12 @@
           mode: endless ? 'endless' : 'story',
           freed: !endless && !!(PVZ.state.data && PVZ.state.data.debt <= 0),
           eggs: PVZ.state.eggCount(),
+          referred: st.stats.referred || 0,
+          refBonus: st.stats.refBonus || 0,
+          specials: st.stats.specials || 0,
+          moments: st.stats.moments || 0,
+          boxStats: PVZ.boxes ? PVZ.boxes.stats() : null,
+          castNums: PVZ.cast ? PVZ.cast.contacts().length : 0,
           avgScore: PVZ.state.ratingAvg(0),
           ratingLog: PVZ.state.ratingTail(8),
           debt: PVZ.state.data.debt || 0,
@@ -4939,6 +6261,8 @@
     function startQTE(opts) {
       // в «перебои со светом» любая мини-игра сложнее
       if (st.dayMod && st.dayMod.hard) opts.hard = true;
+      // мини-игра не останавливает ожидание: показываем, кто именно ждёт
+      if (!opts.customer && st.customer) opts.customer = st.customer;
       st.qte = new sys.QTE(opts);
     }
 
@@ -4963,12 +6287,12 @@
         id: 'boxes', weight: 3,
         run: function () {
           startQTE({
-            type: 'rapid',
+            type: 'balance',
             title: 'Казус: упала стопка коробок',
-            sub: 'Подхватите, пока не рассыпалось!',
+            sub: 'Придержите стопку с той стороны, куда кренит',
             hard: st.day > 2,
             onDone: function (ok) {
-              if (ok) { PVZ.state.addRating(0.04); msg('Поймали! Ничего не разбилось.', 'good'); }
+              if (ok) { PVZ.state.addRating(0.04); msg('Удержали! Ничего не рассыпалось.', 'good'); }
               else { PVZ.state.addRating(-0.05); msg('Коробки рассыпались, пришлось собирать.', 'bad'); st.clock += 5; }
             }
           });
@@ -4978,12 +6302,58 @@
         id: 'spill', weight: 3,
         run: function () {
           startQTE({
-            type: 'wipe',
+            type: 'clean',
+            tool: 'mop',
+            stain: 'coffee',
             title: 'Казус: кто-то разлил кофе',
-            sub: 'Протрите пол, пока никто не поскользнулся',
+            sub: 'Возьмите швабру и протрите пол, пока никто не поскользнулся',
             onDone: function (ok) {
-              if (ok) { PVZ.state.addRating(0.03); msg('Чисто!', 'good'); }
-              else { PVZ.state.addRating(-0.03); msg('Пятно осталось на полу.', 'bad'); }
+              if (ok) { PVZ.state.addRating(0.04); msg('Кофе вытерт, пол чистый.', 'good'); }
+              else { PVZ.state.addRating(-0.04); msg('Лужа осталась на полу — покупатели косились.', 'bad'); }
+            }
+          });
+        }
+      },
+      {
+        id: 'glass', weight: 2, minDay: 2,
+        run: function () {
+          startQTE({
+            type: 'clean',
+            tool: 'broom',
+            stain: 'shards',
+            title: 'Казус: разбилась банка',
+            sub: 'Возьмите веник и соберите осколки, пока никто не порезался',
+            onDone: function (ok) {
+              if (ok) { PVZ.state.addRating(0.04); msg('Осколки собраны, пол безопасен.', 'good'); }
+              else { PVZ.state.addRating(-0.05); msg('Осколки остались на полу — пришлось закрыть проход.', 'bad'); st.clock += 3; }
+            }
+          });
+        }
+      },
+      {
+        id: 'cables', weight: 2, minDay: 3,
+        run: function () {
+          startQTE({
+            type: 'wires',
+            title: 'Казус: провода под стойкой',
+            sub: 'Соедините каждый штекер с гнездом того же цвета',
+            onDone: function (ok) {
+              if (ok) { msg('Провода подключены — касса и сканер снова в сети.', 'good'); PVZ.state.addRating(0.03); }
+              else { msg('Провода так и остались в куче, пришлось звать электрика.', 'bad'); st.clock += 5; PVZ.state.addRating(-0.04); }
+            }
+          });
+        }
+      },
+      {
+        id: 'falling', weight: 2, minDay: 2,
+        run: function () {
+          startQTE({
+            type: 'catch',
+            title: 'Казус: посылки сыплются с полки',
+            sub: 'Ловите коробки нажатиями, пока они не упали на пол',
+            onDone: function (ok) {
+              if (ok) { PVZ.state.addRating(0.04); msg('Все посылки пойманы — ни одна не разбилась.', 'good'); }
+              else { PVZ.state.addRating(-0.05); msg('Посылки попадали на пол, пришлось переупаковывать.', 'bad'); st.clock += 4; }
             }
           });
         }
@@ -5178,9 +6548,9 @@
         id: 'power', weight: 2,
         run: function () {
           startQTE({
-            type: 'rapid',
+            type: 'breakers',
             title: 'Автомат выбило',
-            sub: 'Скорее щёлкните по щитку, пока не погас свет',
+            sub: 'Переключите автоматы в щитке, пока не погас свет',
             onDone: function (ok) {
               if (ok) { PVZ.state.addRating(0.03); msg('Свет вернулся!', 'good'); }
               else { st.lightsOn = false; PVZ.state.addRating(-0.04); msg('Свет погас — включите в зале.', 'bad'); }
@@ -5470,20 +6840,25 @@
       if (st.view === 'counter') {
         if (st.customer) {
           var codeKnown = st.customer.codeScanned || st.customer.dictated;
-          h.push({ id: 'customer', rect: c.customer, label: st.customer.moving ? 'Подходит…' : st.held ? 'Выдать заказ' : (!codeKnown && st.customer.kind === 'pickup' ? 'Телефон покупателя' : st.customer.kind === 'shady' ? '??? — поговорить' : 'Обслужить') });
+          h.push({ id: 'customer', rect: c.customer, label: st.customer.moving ? 'Подходит…' : st.held ? (st.held.unpacked ? 'Отдать товар' : 'Выдать заказ') : (!codeKnown && st.customer.kind === 'pickup' ? 'Телефон покупателя' : st.customer.kind === 'shady' ? '??? — поговорить' : 'Обслужить') });
         }
-        // посылка на столе: сначала кладём, потом сканируем
+        // посылка на столе: сначала кладём, потом сканируем и вскрываем
         if (st.held && !st.held.onTable) {
           h.push({ id: 'parcel', rect: c.parcelOnTable, label: 'Положить ' + st.held.code + ' на стол' });
         } else if (st.held && st.held.onTable) {
           h.push({
             id: 'parcel', rect: c.parcelOnTable,
-            label: st.held.scanned ? 'Посылка отсканирована' : (st.scannerHeld ? 'Сканировать ' + st.held.code : 'Нужен сканер')
+            label: st.held.unpacked ? 'Товар в руках' : st.held.scanned ? 'Вскрыть коробку ' + st.held.code :
+              (st.scannerHeld ? 'Сканировать ' + st.held.code : 'Нужен сканер')
           });
         }
         // сканер уходит со стола в руку — его горячая точка больше не нужна
         if (!st.scannerHeld) h.push({ id: 'scanner', rect: c.scanner, label: 'Взять сканер' });
-        h.push({ id: 'laptop', rect: c.laptop, label: 'Ноутбук (L)' });
+        h.push({
+          id: 'laptop', rect: c.laptop,
+          label: (PVZ.talks && PVZ.talks.pendingCount && PVZ.talks.pendingCount(PVZ.state.data) > 0)
+            ? 'Ноутбук (L) · новое сообщение' : 'Ноутбук (L)'
+        });
         if (art.has('decor_clock')) h.push({ id: 'deskClock', rect: c.deskClock, label: U.fmtTime(st.clock) });
         if (PVZ.state.data && PVZ.state.data.cat) h.push({ id: 'deskCat', rect: { x: 1088, y: 552, w: 148, h: 156 }, label: 'Погладить ' + PVZ.state.data.cat.name });
         h.push({ id: 'warehouseDoor', rect: c.warehouseDoor, label: 'На склад' });
@@ -5494,6 +6869,8 @@
         h.push({ id: 'light', rect: hl.light, label: 'Свет' });
         h.push({ id: 'fitting', rect: hl.fitting, label: 'Примерочная' });
         h.push({ id: 'counter', rect: hl.counter, label: 'К стойке' });
+        var susN = PVZ.boxes ? PVZ.boxes.count() : 0;
+        if (susN > 0) h.push({ id: 'sus', rect: susRect(), label: 'Забытые посылки: ' + susN });
         if (st.phase === 'evening') {
           st.dust.forEach(function (d, i) {
             if (!d.done) h.push({ id: 'dust' + i, rect: { x: d.x - d.r, y: d.y - d.r, w: d.r * 2, h: d.r * 2 }, label: 'Убрать мусор' });
@@ -5557,7 +6934,7 @@
 
     function setView(v) {
       if (st.arrest) return;
-      if (st.qte || st.dlg || st.terminal || st.laptop) return;
+      if (st.qte || st.dlg || st.terminal || st.laptop || st.unpack) return;
       if (v === st.view) return;
       if (v === 'rack' || v === 'warehouse') PVZ.audio.step();
       st.view = v;
@@ -5589,6 +6966,119 @@
       event: triggerEvent,
       finish: finishEvening,
       shady: function () { spawnCustomer('shady'); },
+      /* особые гости и микросценки выдачи */
+      special: function (id) {
+        if (!PVZ.serve) return null;
+        var def = id ? PVZ.serve.specialById(id) : PVZ.serve.specialForDay(st.day, PVZ.state.data);
+        if (!def) return null;
+        return spawnSpecial(def);
+      },
+      specialList: function () {
+        return PVZ.serve ? PVZ.serve.SPECIALS.map(function (d) { return d.id + ':' + d.day; }) : [];
+      },
+      moments: function () {
+        return PVZ.serve ? PVZ.serve.MOMENTS.map(function (m) { return m.id; }) : [];
+      },
+      tryon: function () {
+        var c = st.customer;
+        if (!c) return null;
+        var o = firstOrderFor(c) || st.orders.find(function (x) { return x.state === 'stored' && x.kind === 'clothes'; });
+        if (!o) return null;
+        o.state = 'fitting';
+        o.cellSaved = o.cell;
+        o.cell = null;
+        c.kind = 'fitting-back';
+        c.fittingOrder = o;
+        c.fittingDone = true;
+        c.expr = 'happy';
+        c.arrived = true;
+        c.moving = false;
+        c.vx = 625; c.vgy = 800; c.vh = 580 * (c.height || 1);
+        openFittingBack(c);
+        return o;
+      },
+      /* отладка постоянных персонажей: покупатель и его личная история */
+      cast: function (id) {
+        if (!PVZ.cast) return null;
+        var ch = id ? PVZ.cast.byId(id) : PVZ.cast.pick(st.day, PVZ.state.data);
+        if (!ch) return null;
+        spawnCustomer('question');
+        var c = st.queue[st.queue.length - 1];
+        if (!c) return null;
+        PVZ.cast.dress(c, ch);
+        var cm = PVZ.cast.moodOf(ch);
+        if (cm) {
+          var mo = sys.mood(cm);
+          c.mood = mo.id;
+          c.moodLabel = mo.label;
+          c.moodIcon = mo.icon;
+        }
+        c.castBeat = PVZ.cast.nextBeat(ch, PVZ.state.data);
+        return c;
+      },
+      castTalk: function (id) {
+        var c = api.debug.cast(id);
+        if (!c) return null;
+        stepUpCustomer();
+        c.arrived = true;
+        c.moving = false;
+        c.vx = 625; c.vgy = 800; c.vh = 580 * (c.height || 1);
+        var ch = PVZ.cast.byId(c.castId);
+        var beat = c.castBeat || PVZ.cast.nextBeat(ch, PVZ.state.data);
+        if (!beat) return null;
+        openCastBeat(c, ch, beat, 0, beat.open, function () {});
+        return beat;
+      },
+      /* отладка «забытых» посылок */
+      box: function (kindId) {
+        if (!PVZ.boxes) return null;
+        var b = PVZ.boxes.add(kindId, st.day);
+        st.view = 'hall';
+        openBoxFor(b);
+        return b;
+      },
+      sus: function () { st.view = 'hall'; return PVZ.boxes ? PVZ.boxes.shelf() : []; },
+      /* отладка кривой толпы: интервал прихода и предел очереди по дню */
+      crowd: function (d) {
+        d = d || st.day;
+        return {
+          base: spawnBase(d),
+          max: Math.min(QUEUE_SLOTS.length, 2 + Math.floor(Math.max(0, d - 1) * 0.75)),
+          slots: QUEUE_SLOTS.length
+        };
+      },
+      referral: function (id) {
+        if (!PVZ.cast) return null;
+        var ch = PVZ.cast.byId(id || 'marina');
+        var ref = PVZ.cast.makeReferral(ch, st.day);
+        if (!ref) return null;
+        st.refQueue.push({ charId: ref.char.id, by: ref.by });
+        return ref;
+      },
+      /* отладка сюжетного покупателя: без id — тот, кто заходит сегодня */
+      npc: function (id) {
+        if (!PVZ.talks) return null;
+        var npc = id ? PVZ.talks.npcById(id) : (PVZ.talks.dueNpc(st.day, PVZ.state.data) || {}).npc;
+        if (!npc) return null;
+        var beat = PVZ.talks.nextBeat(npc, PVZ.state.data) || PVZ.talks.genericBeat(npc, st.day);
+        spawnStoryNpc(npc, beat);
+        return beat;
+      },
+      /* отладка разговора: открыть тему у текущего покупателя */
+      talk: function (topicId) {
+        var c = st.customer;
+        if (!c || !PVZ.talks) return null;
+        var topic = topicId ? PVZ.talks.topicById(topicId) : (c.talkTopic || PVZ.talks.pickTopic(PVZ.state.data));
+        if (!topic) return null;
+        c.talkTopic = topic;
+        openTalk(c, topic, 0, topic.open, function () { openPickupDialog(c); });
+        return topic;
+      },
+      chat: function (id) {
+        if (!st.laptop) openLaptop();
+        openLaptopApp('chat');
+        if (id && st.laptop) st.laptop.chatWith = id;
+      },
       banana: function () {
         PVZ.state.installApp('banana');
         PVZ.state.banana().met = true;
@@ -5613,7 +7103,23 @@
       receive: function () {
         var o = supplyOrders()[0];
         if (o) receiveBox(o);
-      }
+      },
+      /* отладка вскрытия: сразу поставить коробку на стол и открыть сцену */
+      unpack: function () {
+        var o = st.orders.find(function (x) { return x.state === 'stored'; });
+        if (!o) return null;
+        if (!st.held || st.held.code !== o.code) {
+          st.held = {
+            id: o.id, code: o.code, item: o.item, kind: o.kind, size: o.size,
+            scanned: true, onTable: true, unpacked: false, placeT: 1
+          };
+        }
+        st.held.onTable = true;
+        st.held.scanned = true;
+        startUnpack();
+        return st.unpack;
+      },
+      unpackFinish: unpackFinish
     };
 
     api.enter = function () {
@@ -5636,7 +7142,17 @@
         st.dayMod = dayModById(s.dayMod);
         st.combo = s.combo || 0;
         st.held = s.held || null;
+        if (st.held) {
+          // старые сохранения не знают про вскрытие — считаем коробку целой
+          var ho = orderById(st.held.id);
+          if (!st.held.kind && ho) st.held.kind = ho.kind;
+          st.held.unpacked = !!st.held.unpacked;
+          st.held.onTable = !!st.held.onTable;
+          st.held.scanned = !!st.held.scanned;
+          st.held.placeT = 1;
+        }
         st.scannerHeld = !!s.scannerHeld;
+        st.refQueue = Array.isArray(s.refQueue) ? s.refQueue : [];
         st.rush = s.rush && s.rush.on ? { on: true, t: s.rush.t || 0, total: s.rush.total || 38 } : null;
         // старые сохранения: добавляем задачу на установку приложений
         if (st.phase === 'morning' && !st.objectives.some(function (o) { return o.id === 'apps'; })) {
@@ -5664,6 +7180,11 @@
         return;
       }
       buildDay();
+      // день в сейве и в смене должны совпадать: от этого зависят визиты и переписка
+      if (PVZ.state.data && (PVZ.state.data.day || 1) !== st.day) {
+        PVZ.state.data.day = st.day;
+        PVZ.state.save();
+      }
       startPhase(st.phase === 'day' ? 'day' : st.phase === 'evening' ? 'evening' : 'morning', true);
       if (st.phase === 'morning') {
         st.objectives = sys.morningObjectives(supplyFor(st.day));
@@ -5671,7 +7192,7 @@
       } else if (st.phase === 'evening') {
         msg('Смена закрывается: дверь, возвраты, касса.', 'info');
       } else {
-        msg('Смена идёт. План — ' + st.plan + ' выдач.', 'info');
+        msg('Смена идёт. План — ' + st.plan + ' выдач.' + boxNote(), 'info');
       }
       if (PVZ.state.endless() && (PVZ.state.data.totals.days || 0) === 0) {
         msg('Бесконечный режим: мафии нет, смены не кончаются. Вечером придёт арендодатель — ставка плюс доля выручки.', 'info');
@@ -5698,6 +7219,11 @@
       return U.clamp(t, 0, 1);
     };
 
+    /* Фаза смены выбирает музыкальную тему: утро, день или вечер */
+    api.musicPhase = function () { return st.phase; };
+    /* Пока открыт разговор с мафией, играет страшная тема */
+    api.musicMood = function () { return st.dlg && st.dlg.scary ? 'scary' : 'calm'; };
+
     api.exit = function () {};
 
     api.serialize = function () {
@@ -5717,9 +7243,38 @@
         combo: st.combo,
         held: st.held,
         scannerHeld: st.scannerHeld,
+        refQueue: st.refQueue || [],
         rush: st.rush && st.rush.on ? { on: true, t: st.rush.t, total: st.rush.total } : null
       };
     };
+
+    /* Терпение идёт, даже когда открыт ноутбук или мини-игра: ожидание
+       не должно замирать. Возвращает true, если покупатель у стойки ушёл. */
+    function tickPatience(dt) {
+      if (st.phase !== 'day' || !st.shiftOpen) return false;
+      var left = false;
+      if (st.customer) {
+        var c = st.customer;
+        c.atT = (c.atT || 0) + dt;
+        if (c.arrived && !st.dev.patience) c.patience -= c.patienceRate * dt;
+        if (c.patience <= 0) {
+          if (c.kind === 'shady') leaveShady(c);
+          else if (c.kind === 'npc') {
+            msg(c.name + ' не дождался: «Ладно, зайду в другой раз».', 'info');
+            leaveNpc(c);
+          } else leaveCustomer(c, false, 'Покупатель не дождался и ушёл');
+          left = true;
+        }
+      }
+      st.queue.forEach(function (cq) {
+        cq.waitT += dt;
+        if (!st.dev.patience) {
+          if (cq.kind === 'npc') cq.patience = Math.max(0.3, cq.patience - 0.0012 * dt);
+          else cq.patience = Math.max(0.08, cq.patience - 0.0026 * patienceScale(st.day) * dt / sys.mood(cq.mood).patience);
+        }
+      });
+      return left;
+    }
 
     api.update = function (dt) {
       st.t += dt;
@@ -5739,7 +7294,20 @@
       st.saveT = (st.saveT || 0) + dt;
       if (st.saveT > 15) {
         st.saveT = 0;
-        if (!st.qte && !st.dlg && !st.terminal) { try { PVZ.game.persist(); } catch (e) { /* ignore */ } }
+        if (!st.qte && !st.dlg && !st.terminal && !st.unpack) { try { PVZ.game.persist(); } catch (e) { /* ignore */ } }
+      }
+      if (st.handoff) {
+        st.handoff.t += dt;
+        if (st.handoff.t > 1.1) st.handoff = null;
+      }
+      if (st.moment) st.moment.t = (st.moment.t || 0) + dt;
+      if (st.smash) {
+        st.smash.t += dt;
+        if (st.smash.t > 1.3) st.smash = null;
+      }
+      if (st.specialBanner > 0) st.specialBanner = Math.max(0, st.specialBanner - dt);
+      if (st.held && st.held.onTable && st.held.placeT < 1) {
+        st.held.placeT = Math.min(1, (st.held.placeT || 0) + dt * 3.4);
       }
       if (st.msg) {
         st.msgT += dt;
@@ -5749,6 +7317,8 @@
       if (st.bellRinging > 0) st.bellRinging -= dt;
       tutUpdate(dt);
       updateThreat(dt);
+      // вскрытие посылки — отдельная сцена-крупный план, время смены замирает
+      if (st.unpack) { unpackUpdate(dt); return; }
       // после закрытия смены ждём только вечерний диалог (визит мафии),
       // иначе он не анимируется и остаётся невидимым
       if (st.finished && !st.dlg) return;
@@ -5778,6 +7348,8 @@
       if (st.qte) {
         var q = st.qte;
         q.update(dt);
+        // мини-игра не останавливает терпение покупателей
+        tickPatience(dt);
         if (st.qte === q && q.done) {
           q.closeDelay -= dt;
           if (q.closeDelay <= 0) st.qte = null;
@@ -5794,6 +7366,8 @@
         if (st.laptop.mode === 'snake') st.laptop.snake.update(dt);
         if (st.laptop.mode === 'memory') st.laptop.memory.update(dt);
         if (st.laptop.mode === 'premium') PVZ.apps.updatePremium(st.laptop.premium, dt);
+        // ноутбук не пауза: очередь и клиент у стойки продолжают ждать
+        tickPatience(dt);
         syncAppsObjective();
         return;
       }
@@ -5847,7 +7421,7 @@
 
         st.spawnT -= dt;
         var inLine = st.queue.length + (st.customer ? 1 : 0);
-        var maxLine = st.rush && st.rush.on ? 6 : st.mods.adSpawn ? 4 : 3;
+        var maxLine = maxLineFor(st.day);
         if (st.spawnT <= 0 && inLine < maxLine && st.clock < 19 * 60 + 30 && st.doorOpen) {
           var tutPick = st.tut && st.tut.on && !st.tut.firstSpawned && st.stats.served === 0;
           if (tutPick) {
@@ -5874,22 +7448,61 @@
           }
         }
 
-        // терпение
-        if (st.customer) {
-          var c = st.customer;
-          c.atT = (c.atT || 0) + dt;
-          if (c.arrived && !st.dev.patience) c.patience -= c.patienceRate * dt;
-          if (c.patience <= 0) {
-            if (c.kind === 'shady') leaveShady(c);
-            else leaveCustomer(c, false, 'Покупатель не дождался и ушёл');
-            updateCrowd(dt);
-            return;
+        // сюжетные знакомые: почти каждый день кто-то заходит поговорить
+        if (!st.npcSpawned && PVZ.talks) {
+          st.npcT = (st.npcT || 0) - dt;
+          if (st.npcT <= 0) {
+            st.npcT = 20;
+            if (st.clock >= 10 * 60 && !(st.tut && st.tut.on) && !st.arrest) {
+              var due = PVZ.talks.dueNpc(st.day, PVZ.state.data);
+              // в бесконечном режиме знакомые иногда заходят просто так
+              if (!due && PVZ.state.endless() && st.day % 3 === 0) {
+                var npcIdle = PVZ.talks.npcForDay(st.day);
+                if (npcIdle) due = { npc: npcIdle, beat: PVZ.talks.genericBeat(npcIdle, st.day) };
+              }
+              var spawnDay = PVZ.state.data && PVZ.state.data.npcSpawnDay;
+              if (due && !(spawnDay && spawnDay[due.npc.id] === st.day)) {
+                spawnStoryNpc(due.npc, due.beat);
+                st.npcSpawned = true;
+                scheduleSpawn();
+              }
+            }
           }
         }
-        st.queue.forEach(function (cq) {
-          cq.waitT += dt;
-          if (!st.dev.patience) cq.patience = Math.max(0.08, cq.patience - 0.0032 * patienceScale(st.day) * dt / sys.mood(cq.mood).patience);
-        });
+
+        // особый гость смены: у каждого дня свой характер и свой визит
+        if (PVZ.serve && !(st.tut && st.tut.on) && !st.arrest && st.doorOpen) {
+          if (!st.special || st.special.done) {
+            var spDef = PVZ.serve.dueSpecial(st.day, st.clock, PVZ.state.data);
+            if (spDef) spawnSpecial(spDef);
+          }
+          updateSpecial(dt);
+        }
+
+        // «забытые» посылки напоминают о себе: тикают, мяукают, храпят
+        if (PVZ.boxes && PVZ.boxes.count()) {
+          st.susT -= dt;
+          if (st.susT <= 0) {
+            st.susT = U.rand(45, 85);
+            var sb = PVZ.boxes.ambientBox();
+            if (sb) {
+              var tn = PVZ.boxes.tone(sb.kind);
+              if (PVZ.audio && PVZ.audio.tone) PVZ.audio.tone(tn[0], tn[1], tn[2], tn[3]);
+              st.susPing = { id: sb.id, t: 0 };
+              msg(PVZ.boxes.soundLine(sb) + ' Забытая посылка ждёт в зале.', 'info');
+            }
+          }
+        }
+        if (st.susPing) {
+          st.susPing.t = (st.susPing.t || 0) + dt;
+          if (st.susPing.t > 2.6) st.susPing = null;
+        }
+
+        // терпение (общая логика — в tickPatience)
+        if (tickPatience(dt)) {
+          updateCrowd(dt);
+          return;
+        }
 
         st.eventT -= dt;
         if (st.eventT <= 0) {
@@ -5911,6 +7524,14 @@
           st.lateWaiting = false;
           var late = sys.makeCustomer({ expr: 'sad' });
           late.kind = 'late'; late.talon = st.talon++; late.patience = 1; late.patienceRate = 0.02;
+          if (PVZ.cast) {
+            var lateCh = PVZ.cast.pick(st.day, PVZ.state.data);
+            if (lateCh) {
+              PVZ.cast.dress(late, lateCh);
+              late.moodIcon = '🌙';
+              late.moodLabel = 'опоздавший';
+            }
+          }
           late.state = 'queue'; late.waitT = 0; late.bubble = null; late.bubbleAlpha = 0;
           late.orderIds = [];
           late.vx = 1240; late.vgy = 488; late.vh = 296 * late.height; late.enterAlpha = 0;
@@ -5950,6 +7571,9 @@
           cashDone: st.cashDone,
           scannerHeld: st.scannerHeld,
           parcel: st.held && st.held.onTable ? st.held : null,
+          carry: st.held && !st.held.onTable ? st.held : null,
+          heldProduct: st.held && st.held.unpacked ? st.held : null,
+          handoff: st.handoff,
           cat: PVZ.state.data.cat,
           catAnim: st.catAnim && st.catAnim.anim,
           phone: null
@@ -5964,6 +7588,7 @@
         }
       } else if (st.view === 'hall') {
         art.drawHallScene(ctx, { t: st.t, night: night, doorOpen: st.doorOpen, fittingBusy: st.fitting.length > 0, lightsOn: st.lightsOn });
+        drawSuspicious(ctx);
         if (st.phase === 'evening') st.dust.forEach(function (d) { if (!d.done) drawDust(ctx, d); });
         if (st.lateWaiting && !st.doorOpen) drawLateSilhouette(ctx);
         if (!st.lightsOn) {
@@ -6004,6 +7629,8 @@
 
       // пожар поверх интерьера
       drawFireOverlay(ctx);
+      // осколки и обломки, когда Гром сносит коробку с полки
+      if (st.smash) art.drawSmash(ctx, st.smash);
 
       // подсветка
       st.hots.forEach(function (hot) {
@@ -6054,11 +7681,12 @@
         queue: st.queue.length,
         scannerHeld: st.scannerHeld,
         tutorial: !!(st.tut && st.tut.on),
+        dialog: !!st.dlg,
         hint: hintText()
       });
 
       // сообщение
-      if (st.msg) {
+      if (st.msg && !st.dlg) {
         var alpha = U.clamp(4.5 - st.msgT, 0, 1) * Math.min(1, st.msgT * 6);
         ctx.save();
         ctx.globalAlpha = alpha;
@@ -6071,12 +7699,25 @@
       }
 
       if (st.threat) drawThreatBanner(ctx);
+      if (st.special && !st.special.done) drawSpecialBanner(ctx);
       if (st.tut && st.tut.on && !MODALS()) drawTutorial(ctx);
 
       if (st.phone) drawPhone(ctx);
       if (st.qte) st.qte.draw(ctx);
       if (st.terminal) st.terminal.draw(ctx);
       if (st.laptop) drawLaptop(ctx);
+      if (st.unpack) art.drawUnpackScene(ctx, st.unpack);
+      if (st.moment && st.dlg) {
+        art.drawMomentScene(ctx, {
+          kind: st.moment.kind,
+          person: st.moment.person,
+          person2: st.moment.person2,
+          item: st.moment.item,
+          title: st.moment.title,
+          subtitle: st.moment.subtitle,
+          t: st.moment.t || 0
+        });
+      }
       if (st.dlg) st.dlg.draw(ctx);
       drawArrestOverlay(ctx);
 
@@ -6094,7 +7735,7 @@
         ctx.restore();
       }
 
-      if (!st.qte && !st.dlg && !st.terminal && !st.laptop && !st.phone) drawDev(ctx);
+      if (!st.qte && !st.dlg && !st.terminal && !st.laptop && !st.phone && !st.unpack) drawDev(ctx);
     };
 
     function hintText() {
@@ -6113,13 +7754,23 @@
           if (!st.cashDone) return 'Сверьте кассу, сдайте возвраты и закройте смену в терминале.';
           return 'Закройте смену в терминале (T).';
         }
+        if (st.customer && st.customer.kind === 'special') {
+          return 'Особый гость: нажмите на него и выберите, как поступить.';
+        }
+        if (st.special && !st.special.done && st.special.c && st.special.c.state === 'queue') {
+          return 'Особый гость ждёт в очереди. Дождитесь его у стойки — и нажмите на него.';
+        }
         if (st.customer) {
           if (st.customer.moving) return 'Покупатель подходит к стойке…';
           if (st.customer.kind === 'shady') return 'Мутный тип в странной одежде явно что-то задумал. Нажмите на него.';
+          if (st.customer.castId && PVZ.cast && PVZ.cast.nextBeat(PVZ.cast.byId(st.customer.castId), PVZ.state.data)) {
+            return 'У покупателя есть своя история — нажмите и выберите «Поговорить».';
+          }
           if (st.held && isMine(st.customer, orderById(st.held.id))) {
             if (!st.held.onTable) return 'Посылка в руках: нажмите на свободное место слева на столе.';
             if (!st.held.scanned) return st.scannerHeld ? 'Нажмите на посылку на столе, чтобы отсканировать штрихкод.' : 'Возьмите сканер слева и нажмите на посылку на столе.';
-            return 'Посылка отсканирована — нажмите на покупателя, чтобы выдать заказ.';
+            if (!st.held.unpacked) return 'Коробка на столе: нажмите на неё и вскройте — нож, пакет, товар.';
+            return 'Товар в руках — нажмите на покупателя, чтобы отдать заказ.';
           }
           if (st.held) return 'В руках чужая посылка: клиент ждёт ' + st.customer.code + '.';
           if (st.customer.codeScanned || st.customer.dictated) {
@@ -6130,6 +7781,7 @@
           return 'Нажмите на покупателя и отсканируйте код с его телефона.';
         }
         if (st.queue.length) return 'Следующий покупатель подойдёт сам. Загляните в ноутбук (L).';
+        if (PVZ.boxes && PVZ.boxes.count()) return 'В зале у стены стоит забытая посылка — загляните в зал (дверь справа).';
         return 'Покупателей нет — можно заглянуть в ноутбук (L) или в зал.';
       }
       if (st.view === 'warehouse') {
@@ -6146,6 +7798,7 @@
       if (st.view === 'hall') {
         if (st.phase === 'evening') return 'Уберите мусор и закройте дверь.';
         if (st.phase === 'morning') return 'Включите свет и откройте входную дверь.';
+        if (PVZ.boxes && PVZ.boxes.count()) return 'Забытые посылки: ' + PVZ.boxes.count() + '. Нажмите на стопку у стены.';
         return 'Вернитесь к стойке — нажмите на неё справа.';
       }
       return '';
@@ -6364,6 +8017,8 @@
     }
 
     function drawDev(ctx) {
+      // в релизной сборке отладки нет вовсе
+      if (window.PVZ_RELEASE) return;
       // ?clean=1 — кадры для магазина без кнопки DEV
       if (location.search.indexOf('clean=1') >= 0) return;
       var tabHover = U.hit(DEV_TAB, PVZ.input.x, PVZ.input.y) && !PVZ.input.touch;
@@ -6386,6 +8041,7 @@
     }
 
     function handleDevTap(x, y) {
+      if (window.PVZ_RELEASE) return false;
       if (U.hit(DEV_TAB, x, y)) { st.dev.open = !st.dev.open; PVZ.audio.click(); return true; }
       if (!st.dev.open) return false;
       var items = devRects();
@@ -6398,6 +8054,7 @@
 
     /* ---------------- ввод ---------------- */
     api.onMove = function (x, y) {
+      if (st.unpack) { unpackMove(x, y); return; }
       if (st.drag && st.drag.active) {
         st.drag.moved += Math.abs(x - st.drag.x) + Math.abs(y - st.drag.y);
         st.drag.x = x;
@@ -6409,7 +8066,7 @@
       }
     };
 
-    var MODALS = function () { return !!(st.laptop || st.terminal || st.qte || st.phone || st.dlg); };
+    var MODALS = function () { return !!(st.laptop || st.terminal || st.qte || st.phone || st.dlg || st.unpack); };
 
     function startDrag(order, mode, x, y) {
       st.drag = { order: order, mode: mode, x: x, y: y, sx: x, sy: y, active: true, moved: 0 };
@@ -6417,6 +8074,7 @@
     }
 
     api.onDown = function (x, y) {
+      if (st.unpack) { unpackDown(x, y); return; }
       if (MODALS() || st.view !== 'rack' || st.drag) return;
       var tabs = rackTabs();
       for (var i = 0; i < tabs.length; i++) if (U.hit(tabs[i], x, y)) return;
@@ -6431,6 +8089,7 @@
     };
 
     api.onUp = function (x, y) {
+      if (st.unpack) { unpackUp(); return; }
       var d = st.drag;
       if (!d) return;
       st.drag = null;
@@ -6460,6 +8119,7 @@
     }
 
     api.onTap = function (x, y) {
+      if (st.unpack) { unpackTap(x, y); return; }
       if (st.laptop) { laptopTap(x, y); return; }
       if (st.terminal) { st.terminal.tap(x, y); return; }
       if (st.qte) { st.qte.onTap(x, y); return; }
@@ -6482,7 +8142,7 @@
       // во время визита полиции игрок не работает — только слушает
       if (st.arrest) return;
 
-      if (st.dev.open || U.hit(DEV_TAB, x, y)) {
+      if (!window.PVZ_RELEASE && (st.dev.open || U.hit(DEV_TAB, x, y))) {
         if (handleDevTap(x, y)) return;
       }
 
@@ -6565,6 +8225,7 @@
       } else if (id === 'fitting') {
         msg(st.fitting.length ? 'В примерочной сейчас клиент.' : 'Примерочная свободна. Клиенты ходят туда сами.');
       } else if (id === 'counter') setView('counter');
+      else if (id === 'sus') openBoxFor(null);
       else if (id.indexOf('dust') === 0) {
         var di = parseInt(id.slice(4), 10);
         var d = st.dust[di];
@@ -6591,6 +8252,17 @@
     };
 
     api.onKey = function (k) {
+      if (st.unpack) {
+        if (k === 'Escape') { closeUnpack(); return; }
+        if (k === ' ' || k === 'Enter') {
+          var u = st.unpack;
+          if (u.phase === 'knifeIdle') pickUnpackTool('knife');
+          else if (u.phase === 'scissorsIdle') pickUnpackTool('scissors');
+          else if (u.phase === 'bagCut') unpackSnip();
+          else if (u.phase === 'product') unpackPullProduct();
+        }
+        return;
+      }
       if (!st.laptop && !st.terminal && !st.qte && !st.phone && !st.dlg) trackKonami(k);
       if (st.laptop) {
         var L = st.laptop;
@@ -6668,12 +8340,14 @@
 
     /* Esc сначала закрывает окна ноутбука/терминала/телефона, иначе — пауза */
     api.onEscape = function () {
+      if (st.unpack) { closeUnpack(); return true; }
       if (!(st.laptop || st.terminal || st.phone)) return false;
       api.onKey('Escape');
       return true;
     };
 
     api.onSwipe = function (dir) {
+      if (st.unpack) return;
       if (st.qte) { st.qte.onSwipe(dir); return; }
       if (st.arrest) return;
       if (st.dlg || st.terminal || st.laptop || st.phone) return;
@@ -6759,6 +8433,8 @@
         ['Жалоб', String(data.complaints)],
         ['Осталось до завтра', (data.carry ? data.carry.length : 0) + ' шт.']
       ];
+      if (data.moments) rows.push(['Живых выдач', String(data.moments)]);
+      if (data.specials) rows.push(['Особых гостей', String(data.specials)]);
       if (data.avgScore) {
         rows.push(['Средняя оценка клиентов', data.avgScore.toFixed(2) + ' / 5']);
       }
@@ -6812,6 +8488,14 @@
         art.txt(ctx, 'Долг закрыт. Мафия больше не придёт — вы свободны.', 640, 548, 14, '#8fe0a8', 700, 'center');
       }
       art.txt(ctx, verdict, 640, 528, 15, 'rgba(255,240,220,0.6)', 600, 'center');
+      var extraLine = [];
+      if (data.referred) extraLine.push('по рекомендации: ' + data.referred);
+      if (data.refBonus) extraLine.push('бонус за рекомендации: ' + U.fmtMoney(data.refBonus));
+      if (data.boxStats && data.boxStats.shelf) extraLine.push('забытых посылок на полке: ' + data.boxStats.shelf);
+      if (data.castNums) extraLine.push('знакомых в телефоне: ' + data.castNums);
+      if (extraLine.length) {
+        art.txt(ctx, extraLine.join(' · '), 640, 568, 12, 'rgba(255,216,168,0.82)', 600, 'center');
+      }
 
       btns.forEach(function (b) {
         var hov = U.hit(b.rect, PVZ.input.x, PVZ.input.y) && !PVZ.input.touch;
@@ -6852,6 +8536,7 @@
       if (k === 'Escape') scene.onTap(865, 680);
     };
     scene.musicTension = function () { return 0.1; };
+    scene.musicPhase = function () { return 'evening'; };
     return scene;
   };
 
@@ -6940,6 +8625,8 @@
         if (b) scene.onTap(b.rect.x + b.rect.w / 2, b.rect.y + b.rect.h / 2);
       }
     };
+    scene.musicTension = function () { return 0.22; };
+    scene.musicPhase = function () { return 'day'; };
     return scene;
   };
 
@@ -7020,6 +8707,7 @@
       if (k === 'Escape') scene.onTap(640, 660);
     };
     scene.musicTension = function () { return 0.92; };
+    scene.musicPhase = function () { return 'evening'; };
     return scene;
   };
 
@@ -7141,6 +8829,7 @@
       if (k === 'Escape') scene.onTap(640, 686);
     };
     scene.musicTension = function () { return 0.3; };
+    scene.musicPhase = function () { return 'menu'; };
     return scene;
   };
 
@@ -7423,6 +9112,7 @@
       if (k === 'Escape') openSetup();
     };
     scene.musicTension = function () { return idx >= 2 ? 0.3 : 0.62; };
+    scene.musicPhase = function () { return 'menu'; };
     return scene;
   };
 
@@ -7447,12 +9137,15 @@
     var btn = { x: 420, y: 604, w: 440, h: 52 };
 
     var bossPerson = {
-      skin: 1, hair: '#161412', style: 'short', shirt: '#1b1b22', pants: '#141418',
-      coat: '#101014', beard: true, expr: 'angry', glasses: true
+      skin: 1, hair: '#161412', style: 'short', shirt: '#f1e8d9', pants: '#191920',
+      coat: '#8e2440', hat: 'fedora', hatColor: '#8e2440', tie: '#141014',
+      stubble: true, scar: true, cigar: true, evil: true, armsCrossed: true,
+      expr: 'angry', build: 1.3, headScale: 0.92
     };
     var goonPerson = {
-      skin: 3, hair: '#15110e', style: 'short', shirt: '#24242e', pants: '#1b1b21',
-      coat: '#181820', beard: true, expr: 'angry'
+      skin: 3, hair: '#131110', style: 'bald', shirt: '#22222a', pants: '#17171c',
+      coat: '#1e1e26', beard: true, shades: true, scar: true, stubble: true, evil: true,
+      armsCrossed: true, expr: 'snarl', build: 1.42, headScale: 0.8
     };
 
     var lines = (function () {
@@ -7516,12 +9209,15 @@
       t = 0;
       line = 0;
       beatT = 1.2;
-      // вечерний визит: резко включаем страшную тему и низкий удар
-      PVZ.music.snapMood('scary');
+      // вечерний визит: радио захлёбывается помехами, включается страшная тема
+      if (PVZ.music && PVZ.music.cutRadio && PVZ.state.hasApp && PVZ.state.hasApp('radio') && !PVZ.music.silent) {
+        PVZ.music.cutRadio();
+      }
+      if (PVZ.music && PVZ.music.snapMood) PVZ.music.snapMood('scary');
       PVZ.audio.bad();
       PVZ.audio.boom();
     };
-    scene.exit = function () { PVZ.music.setMood('calm'); };
+    scene.exit = function () { if (PVZ.music && PVZ.music.setMood) PVZ.music.setMood('calm'); };
     scene.update = function (dt) {
       t += dt;
       // сердцебиение в тишине диалога
@@ -7530,7 +9226,7 @@
     };
     scene.draw = function (ctx) {
       var crowd = [
-        { person: bossPerson, x: 372, gy: 520, h: 356, mood: '😠', bubbleAlpha: 0, alpha: 1 },
+        { person: bossPerson, x: 372, gy: 520, h: 356, mood: null, bubbleAlpha: 0, alpha: 1 },
         { person: goonPerson, x: 600, gy: 520, h: 330, mood: null, bubbleAlpha: 0, alpha: 1 }
       ];
       art.drawCounterScene(ctx, {
@@ -7843,6 +9539,7 @@
       }
     };
     scene.musicTension = function () { return 0.12; };
+    scene.musicPhase = function () { return 'menu'; };
     return scene;
   };
 })();

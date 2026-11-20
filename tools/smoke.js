@@ -75,7 +75,7 @@ global.addEventListener = noop;
 global.removeEventListener = noop;
 global.URLSearchParams = URLSearchParams;
 
-const files = ['core.js', 'pay.js', 'art.js', 'systems.js', 'apps.js', 'scenes.js', 'main.js'];
+const files = ['core.js', 'music.js', 'pay.js', 'ads.js', 'art.js', 'systems.js', 'talks.js', 'cast.js', 'serve.js', 'boxes.js', 'apps.js', 'scenes.js', 'main.js'];
 for (const f of files) {
   const code = fs.readFileSync(path.join(ROOT, 'src', f), 'utf8');
   try {
@@ -314,9 +314,11 @@ shadyC.moving = false; shadyC.arrived = true; shadyC.arrivedT = 1;
 step(bnScene, 4);
 bnScene.onTap(600, 290);
 check('диалог мутного типа открылся', !!bnSt.dlg);
-function tapChoice(scene, i, n) {
-  const gap = Math.min(60, 300 / Math.max(1, n));
-  scene.onTap(316 + 300, 372 + i * gap + 23);
+function tapChoice(scene, i) {
+  const dlg = scene.debug.st.dlg;
+  if (!dlg || !dlg.choiceRects[i]) return;
+  const r = dlg.choiceRects[i];
+  scene.onTap(r.x + r.w / 2, r.y + r.h / 2);
 }
 if (bnSt.dlg) tapChoice(bnScene, 0, bnSt.dlg.choices.length);
 if (bnSt.dlg) tapChoice(bnScene, 0, bnSt.dlg.choices.length);
@@ -576,6 +578,39 @@ check('запустился QTE сканирования посылки', !!(pst
 if (pst.qte) pst.qte.finish(true);
 check('посылка отсканирована', !!(pst.held && pst.held.scanned));
 pst.qte = null;
+
+// --- вскрытие: нож → пакет ножницами → товар в руках
+pst.held.kind = pOrder.kind;
+pst.held.placeT = 1;
+step(parcelScene, 2);
+parcelScene.onTap(px, py);
+check('открылась сцена вскрытия', !!(pst.unpack && pst.unpack.phase), pst.unpack && pst.unpack.phase);
+step(parcelScene, 70);
+check('сцена ждёт нож', pst.unpack && pst.unpack.phase === 'knifeIdle', pst.unpack && pst.unpack.phase);
+parcelScene.onTap(1000, 470);
+check('нож взят', pst.unpack && pst.unpack.tool === 'knife', pst.unpack && pst.unpack.phase);
+PVZ.input.down = true;
+parcelScene.onDown(640, 318);
+step(parcelScene, 180);
+PVZ.input.down = false;
+parcelScene.onUp(640, 318);
+check('скотч прорезан', pst.unpack && pst.unpack.progress >= 1, pst.unpack && pst.unpack.progress);
+step(parcelScene, 70);
+check('крышка открыта, ждём ножницы', pst.unpack && pst.unpack.phase === 'scissorsIdle', pst.unpack && pst.unpack.phase);
+parcelScene.onTap(270, 470);
+check('ножницы взяты', pst.unpack && pst.unpack.tool === 'scissors', pst.unpack && pst.unpack.phase);
+for (let i = 0; i < 3; i++) {
+  parcelScene.onTap(640, 300);
+  step(parcelScene, 20);
+}
+check('пакет разрезан', pst.unpack && pst.unpack.snips === 3, pst.unpack && pst.unpack.snips);
+step(parcelScene, 70);
+check('товар показан', pst.unpack && pst.unpack.phase === 'product', pst.unpack && pst.unpack.phase);
+parcelScene.onTap(640, 300);
+step(parcelScene, 70);
+check('товар достали', !!(pst.held && pst.held.unpacked), pst.held && JSON.stringify(pst.held));
+check('сцена вскрытия закрылась', !pst.unpack);
+
 // без посылки на столе выдать нельзя
 pst.held = { id: pOrder.id, code: pOrder.code, item: pOrder.item, scanned: false, onTable: false };
 pst.customer = null;
@@ -583,6 +618,52 @@ check('сканирование требует стол', (function () {
   const before = pst.qte;
   return before == null;
 })());
+
+// --- выдача именно товара: диалог, «Отдать товар» и анимация передачи
+pst.queue.length = 0;
+pst.held = null;
+parcelScene.debug.spawn('pickup');
+parcelScene.debug.step();
+const giver = pst.customer;
+check('покупатель у стойки для выдачи', !!giver);
+if (giver) {
+  giver.vx = 625; giver.vgy = 800; giver.vh = 580 * (giver.height || 1);
+  giver.moving = false; giver.arrived = true; giver.arrivedT = 1;
+  giver.codeScanned = true;
+  const gOrder = pst.orders.find((o) => o.id === giver.orderIds[0]);
+  check('товар для выдачи найден', !!gOrder);
+  pst.held = {
+    id: gOrder.id, code: gOrder.code, item: gOrder.item, kind: gOrder.kind,
+    scanned: true, onTable: true, unpacked: true, placeT: 1
+  };
+  const servedBefore = pst.stats.served;
+  step(parcelScene, 4);
+  parcelScene.onTap(620, 300);
+  check('диалог выдачи открылся', !!pst.dlg);
+  if (pst.dlg) {
+    const giveRect = pst.dlg.choiceRects[0];
+    parcelScene.onTap(giveRect.x + giveRect.w / 2, giveRect.y + giveRect.h / 2);
+    // после «Отдать товар» открывается микросценка выдачи — её тоже проходим
+    check('микросценка выдачи открылась', !!(pst.moment || pst.dlg), 'moment=' + !!pst.moment + ' dlg=' + !!pst.dlg);
+    let mguard = 0;
+    while (pst.dlg && mguard++ < 4) {
+      const r = pst.dlg.choiceRects[0];
+      parcelScene.onTap(r.x + r.w / 2, r.y + r.h / 2);
+      step(parcelScene, 2);
+    }
+    check('товар передан покупателю', pst.stats.served === servedBefore + 1, 'served=' + pst.stats.served);
+    check('запущена анимация передачи', !!(pst.handoff && pst.handoff.item), JSON.stringify(pst.handoff));
+    check('руки опустели после выдачи', pst.held === null);
+  }
+}
+
+// --- спрайты товаров: каждый товар каталога и пасхалок рисуется без ошибок
+const itemNames = PVZ.sys.CATALOG.map((o) => o.name).concat(PVZ.sys.EGGS.map((e) => e.item));
+let itemErr = null;
+try {
+  itemNames.forEach((n) => PVZ.art.drawCatalogItem(ctxStub, n, 'other', 40, 40, 120, 120));
+} catch (e) { itemErr = e; }
+check('спрайты всех товаров рисуются', !itemErr, itemErr && itemErr.message);
 
 // --- события дня: типы разные и реально меняют правила
 const dayTypes = PVZ.dayMods || [];
@@ -682,10 +763,685 @@ modScene.debug.dayMod('returns_day');
 check('день возвратов повышает долю возвратов', (mst.dayMod.returns || 1) > 1.5);
 step(modScene, 2);
 
+// --- живые покупатели: темы, сюжетные гости и мессенджер
+function tapDlg(scene, i) {
+  const d = scene.debug.st.dlg;
+  if (!d || !d.choiceRects[i]) return false;
+  const r = d.choiceRects[i];
+  scene.onTap(r.x + r.w / 2, r.y + r.h / 2);
+  return true;
+}
+
+PVZ.state.newGame();
+silenceStories();
+check('мессенджер предустановлен', PVZ.state.hasApp('chat'), JSON.stringify(PVZ.state.data.apps));
+check('темы разговоров есть', PVZ.talks.TOPICS.length >= 12, 'topics=' + PVZ.talks.TOPICS.length);
+check('у каждой темы два круга, выбор и финал', PVZ.talks.TOPICS.every((t) =>
+  t.open && t.end && t.steps.length >= 2 && t.steps.every((s) => s.choices.length >= 2 && s.choices.every((c) => c.t && c.reply))));
+check('сюжетных покупателей трое', PVZ.talks.NPCS.length === 3);
+check('у сюжетных покупателей есть визиты по дням', PVZ.talks.NPCS.every((n) =>
+  n.beats.length >= 6 && n.person && n.phone && n.idle.length));
+check('контакты Артёма, мамы и поддержки открыты', ['artem', 'mom', 'support'].every((id) => PVZ.talks.contactUnlocked(id, PVZ.state.data)));
+check('сюжетные знакомые пока не в контактах', !PVZ.talks.contactUnlocked('semyon', PVZ.state.data));
+
+// визит сюжетного гостя открывает контакт
+const npcScene = PVZ.scenes.shift({ day: 1, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(npcScene);
+const nst = npcScene.debug.st;
+nst.shiftOpen = true; nst.doorOpen = true; nst.lightsOn = true;
+npcScene.debug.npc('semyon');
+check('сюжетный гость появился в зале', nst.queue.some((q) => q.kind === 'npc' && q.npcId === 'semyon'));
+npcScene.debug.step();
+const npcGuest = nst.customer;
+if (npcGuest) {
+  npcGuest.vx = 625; npcGuest.vgy = 800; npcGuest.vh = 580 * (npcGuest.height || 1);
+  npcGuest.moving = false; npcGuest.arrived = true; npcGuest.arrivedT = 1;
+}
+step(npcScene, 4);
+npcScene.onTap(600, 290);
+check('диалог сюжетного гостя открылся', !!nst.dlg);
+check('у гостя есть выбор', nst.dlg && nst.dlg.choices.length >= 2);
+tapDlg(npcScene, 0);
+check('номер знакомого записан в мессенджер', PVZ.state.data.chatUnlocked.indexOf('semyon') >= 0);
+check('визит отмечен пройденным', (PVZ.state.data.npcSeen.semyon || []).indexOf('s1') >= 0);
+tapDlg(npcScene, 0);
+step(npcScene, 4);
+check('гость ушёл без оценки', !nst.customer);
+
+// переписка: новые сообщения, выбор ответа и следующий день
+PVZ.state.data.day = 2;
+const chatNode = PVZ.talks.chatNode('semyon', PVZ.state.data);
+check('на второй день есть сюжетная переписка', !!chatNode && chatNode.id === 'semyon_d2', chatNode && chatNode.id);
+PVZ.talks.ensureThread('semyon');
+check('сообщения легли в ленту', PVZ.state.data.chatLog.some((m) => m.to === 'semyon' && m.from === 'semyon'));
+check('есть варианты ответа', PVZ.talks.repliesFor('semyon', PVZ.state.data).length >= 2);
+const chatMoney = PVZ.state.data.money;
+const answered = PVZ.talks.answerChat('semyon', 0);
+check('ответ принят', !!answered && PVZ.state.data.chatDone.semyon_d2 === 1);
+check('сообщение игрока записано', PVZ.state.data.chatLog.some((m) => m.from === 'me' && m.to === 'semyon'));
+check('сюжетный узел закрыт', PVZ.talks.chatNode('semyon', PVZ.state.data) === null);
+check('на смене остаётся бытовая болтовня', PVZ.talks.repliesFor('semyon', PVZ.state.data).length >= 1);
+PVZ.state.data.day = 4;
+check('на четвёртый день новый разговор', (PVZ.talks.chatNode('semyon', PVZ.state.data) || {}).id === 'semyon_d4');
+
+// экран мессенджера: вёрстка и клик по варианту ответа
+PVZ.state.data.chatUnlocked = ['semyon', 'liza', 'vera'];
+PVZ.state.data.day = 3;
+const chatScene = PVZ.scenes.shift({ day: 3, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(chatScene);
+chatScene.debug.openApp('chat');
+step(chatScene, 3);
+check('экран мессенджера рисуется', !!(chatScene.debug.st.laptop && chatScene.debug.st.laptop.mode === 'chat'));
+chatScene.debug.st.laptop.chatWith = 'liza';
+const chatWin = { x: 200, y: 120, w: 880, h: 480 };
+const chatLay = PVZ.apps.chatLayout(chatWin, 'liza');
+check('вёрстка переписки: контакты и ответы', chatLay.rows.length >= 6 && chatLay.opts.length >= 2);
+const optRect = chatLay.opts[0];
+PVZ.apps.tapScreen('chat', chatWin, optRect.x + 10, optRect.y + 10, { laptop: chatScene.debug.st.laptop });
+check('ответ из мессенджера принят', PVZ.state.data.chatDone.liza_d3 === 1, JSON.stringify(PVZ.state.data.chatDone));
+
+// разговор с обычным покупателем через вариант в диалоге
+PVZ.state.newGame();
+silenceStories();
+PVZ.state.data.tutorialSeen = true;
+PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews', 'chat'];
+const talkScene = PVZ.scenes.shift({ day: 2, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(talkScene);
+const tst = talkScene.debug.st;
+tst.shiftOpen = true; tst.doorOpen = true; tst.lightsOn = true;
+tst.queue.length = 0; tst.customer = null;
+talkScene.debug.spawn('question');
+talkScene.debug.step();
+const qc = tst.customer;
+check('покупатель с вопросом пришёл', !!qc && qc.kind === 'question');
+if (qc) {
+  qc.vx = 625; qc.vgy = 800; qc.vh = 580 * (qc.height || 1);
+  qc.moving = false; qc.arrived = true; qc.arrivedT = 1;
+  // общая тема проверяется отдельно от личной истории персонажа
+  qc.castId = null;
+  qc.castBeat = null;
+}
+step(talkScene, 4);
+talkScene.onTap(600, 290);
+check('диалог вопроса открылся', !!tst.dlg);
+const qLen = tst.dlg ? tst.dlg.choices.length : 0;
+check('в диалоге есть вариант «поболтать»', qLen >= 3, 'choices=' + qLen);
+tapDlg(talkScene, qLen - 1);
+check('разговор начался с темы клиента', !!(tst.dlg && qc.talkTopic && tst.dlg.text === qc.talkTopic.open));
+tapDlg(talkScene, 0);
+check('второй круг разговора', !!(tst.dlg && tst.dlg.text === qc.talkTopic.steps[0].choices[0].reply));
+tapDlg(talkScene, 0);
+check('разговор дошёл до финала', !!tst.dlg);
+tapDlg(talkScene, 0);
+check('после разговора вернулись к вопросу', !!(tst.dlg && qc.question && tst.dlg.text === qc.question.q));
+check('тема записана как обсуждённая', PVZ.state.data.talkSeen.indexOf(qc.talkTopic.id) >= 0);
+step(talkScene, 2);
+
+// --- сохранение: мессенджер и прогресс переписки
+PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews']; // без чата, как в старом сейве
+PVZ.state.data.chatUnlocked = ['semyon'];
+PVZ.state.data.chatDone = { semyon_d2: 1 };
+PVZ.state.save();
+const loadedChat = PVZ.state.load();
+check('чат досоздан в старом сохранении', !!loadedChat && loadedChat.apps.indexOf('chat') >= 0, loadedChat && JSON.stringify(loadedChat.apps));
+check('прогресс переписки сохранён', !!loadedChat && loadedChat.chatUnlocked.indexOf('semyon') >= 0 && loadedChat.chatDone.semyon_d2 === 1);
+
+// --- сюжетный гость приходит сам, без отладочного вызова
+PVZ.state.newGame();
+silenceStories();
+PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews', 'chat'];
+PVZ.state.data.tutorialSeen = true;
+const autoScene = PVZ.scenes.shift({ day: 3, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(autoScene);
+const ast = autoScene.debug.st;
+ast.phase = 'day'; ast.shiftOpen = true; ast.doorOpen = true; ast.lightsOn = true;
+ast.clock = 10 * 60; ast.queue.length = 0; ast.customer = null; ast.npcT = 0;
+step(autoScene, 120);
+const autoGuest = ast.queue.concat(ast.customer ? [ast.customer] : []).find((c) => c.kind === 'npc');
+check('сюжетный гость приходит сам', !!autoGuest, JSON.stringify(ast.queue.map((c) => c.kind)));
+check('в гости пришла Вера', !!(autoGuest && autoGuest.npcId === 'vera'), autoGuest && autoGuest.npcId);
+check('гость ждёт у стойки долго', !!(autoGuest && autoGuest.patienceRate < 0.01), autoGuest && autoGuest.patienceRate);
+
+// сюжетные гости и переписка идут каждый день
+PVZ.state.newGame();
+silenceStories();
+let npcDays = 0;
+for (let d = 1; d <= 10; d++) {
+  PVZ.state.data.day = d;
+  const due = PVZ.talks.dueNpc(d, PVZ.state.data);
+  if (due) { PVZ.talks.markBeat(due.npc.id, due.beat.id); npcDays++; }
+}
+check('сюжетный гость есть каждый день', npcDays === 10, 'npcDays=' + npcDays);
+PVZ.state.data.chatDone = {};
+PVZ.state.data.chatUnlocked = ['semyon', 'liza', 'vera'];
+let chatDays = 0;
+for (let d = 1; d <= 10; d++) {
+  PVZ.state.data.day = d;
+  let any = false;
+  PVZ.talks.contacts().forEach((c) => {
+    let node;
+    while ((node = PVZ.talks.chatNode(c.id, PVZ.state.data))) {
+      PVZ.state.data.chatDone[node.id] = 1;
+      any = true;
+    }
+  });
+  if (any) chatDays++;
+}
+check('новый разговор в мессенджере каждый день', chatDays === 10, 'chatDays=' + chatDays);
+
+// --- постоянные персонажи: личные истории, номера и рекомендации
+PVZ.state.newGame();
+silenceStories();
+const CH = PVZ.cast.CHARS;
+check('постоянных персонажей не меньше двенадцати', CH.length >= 12, 'chars=' + CH.length);
+check('есть и хорошие, и плохие', CH.some((c) => c.align === 'good') && CH.some((c) => c.align === 'bad'));
+check('у каждого по три личные истории', CH.every((c) => c.beats.length >= 3), JSON.stringify(CH.map((c) => c.id + ':' + c.beats.length)));
+check('в каждой истории есть выбор, ответы и финал', CH.every((c) => c.beats.every((b) =>
+  b.id && b.title && b.open && b.end && b.steps.length >= 2 &&
+  b.steps.every((s) => s.choices.length >= 2 && s.choices.every((o) => o.t && o.reply)))));
+check('у каждого есть лицо, роль и бытовые реплики', CH.every((c) => c.person === undefined && c.look && c.role && c.greet.length && c.idle.length));
+check('на первой смене знакомых немного', CH.filter((c) => (c.fromDay || 1) <= 1).length <= 6,
+  'day1=' + CH.filter((c) => (c.fromDay || 1) <= 1).length);
+check('к пятой смене в районе уже много людей', CH.filter((c) => (c.fromDay || 1) <= 5).length >= 11);
+
+const castScene = PVZ.scenes.shift({ day: 3, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(castScene);
+const cst = castScene.debug.st;
+cst.shiftOpen = true; cst.doorOpen = true; cst.lightsOn = true; cst.clock = 12 * 60;
+cst.queue.length = 0; cst.customer = null;
+const cstBeat = castScene.debug.castTalk('marina');
+check('личная история открылась у стойки', !!cstBeat && !!cst.dlg && cst.dlg.text === cstBeat.open,
+  cst.dlg && cst.dlg.text);
+const beatsBefore = PVZ.cast.beatsDone('marina').length;
+let castGuard = 0;
+while (cst.dlg && castGuard++ < 12) tapDlg(castScene, 0);
+check('личная история засчитана', PVZ.cast.beatsDone('marina').length === beatsBefore + 1,
+  JSON.stringify(PVZ.cast.beatsDone('marina')));
+check('отношения с персонажем выросли', PVZ.cast.rel('marina') >= 1, 'rel=' + PVZ.cast.rel('marina'));
+check('персонаж оставил номер телефона', PVZ.cast.hasNumber('marina') && PVZ.talks.contacts().some((c) => c.id === 'c_marina'));
+check('номер стал контактом в мессенджере', PVZ.talks.contactUnlocked('c_marina', PVZ.state.data));
+check('в переписке есть что ответить', PVZ.talks.repliesFor('c_marina', PVZ.state.data).length >= 2);
+
+// рекомендация: знакомый рассказывает о ПВЗ, приходит новый человек
+cst.customer = null; cst.queue.length = 0;
+const ref = castScene.debug.referral('marina');
+check('рекомендация создана', !!ref && !!ref.char, JSON.stringify(ref && ref.by));
+cst.queue.length = 0; cst.customer = null;
+castScene.debug.spawn('question');
+const referred = cst.queue[cst.queue.length - 1];
+check('по рекомендации пришёл человек', !!referred && referred.referredBy === 'Марина', referred && referred.referredBy);
+check('у пришедшего есть своя история', !!(referred && PVZ.cast.byId(referred.castId)), referred && referred.castId);
+check('рекомендация учтена в статистике', PVZ.cast.refs('marina') >= 1 && PVZ.cast.totalRefs() >= 1);
+
+// плохой персонаж оставляет после себя «подарок»
+PVZ.state.data.suspicious.boxes.length = 0;
+PVZ.state.data.suspicious.seq = 0;
+PVZ.state.data.suspicious.arrived = 0;
+const badScene = PVZ.scenes.shift({ day: 4, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(badScene);
+const bst0 = badScene.debug.st;
+bst0.shiftOpen = true; bst0.doorOpen = true; bst0.lightsOn = true;
+bst0.queue.length = 0; bst0.customer = null;
+// убираем коробку, пришедшую утром, чтобы проверить именно «подарок» персонажа
+PVZ.state.data.suspicious.boxes.length = 0;
+const badC = badScene.debug.cast('gosha');
+check('плохой персонаж пришёл', !!badC && badC.castAlign === 'bad');
+let gotBox = false;
+for (let attempt = 0; attempt < 30 && !gotBox; attempt++) {
+  bst0.queue.length = 0; bst0.customer = null; bst0.leavers.length = 0;
+  badScene.debug.cast('gosha');
+  badScene.debug.step();
+  const cur = bst0.customer;
+  if (!cur) continue;
+  cur.arrived = true; cur.moving = false;
+  cur.patience = 0.001;
+  cur.patienceRate = 99;
+  badScene.update(0.4);
+  if (PVZ.boxes.count() > 0) gotBox = true;
+}
+check('после плохого персонажа может остаться безымянная коробка', gotBox, 'count=' + PVZ.boxes.count());
+
+// --- кривая толпы: первая смена тихая, десятая — полный зал
+const crowdScene = PVZ.scenes.shift({ day: 1, phase: 'day' });
+const crowd1 = crowdScene.debug.crowd(1);
+const crowd10 = crowdScene.debug.crowd(10);
+check('на первой смене покупатели приходят редко', crowd1.base >= 18 && crowd1.max <= 2,
+  JSON.stringify(crowd1));
+check('к десятой смене поток плотный', crowd10.base <= 4 && crowd10.max >= 7,
+  JSON.stringify(crowd10));
+check('в очереди достаточно мест для толпы', crowd10.slots >= 8);
+
+// --- забытые посылки: звуки, осмотр, вскрытие и полиция
+PVZ.state.newGame();
+silenceStories();
+check('видов забытых посылок много', PVZ.boxes.KINDS.length >= 10, 'kinds=' + PVZ.boxes.KINDS.length);
+check('у каждого вида есть звук и три исхода', PVZ.boxes.KINDS.every((k) =>
+  k.sound && k.odd && k.openText && k.callText && k.reportText && k.tone && k.openFx));
+const sb1 = PVZ.boxes.add('ticking', 1);
+check('коробка появилась на полке', PVZ.boxes.count() === 1 && sb1.status === 'shelf');
+check('до осмотра описание короткое', PVZ.boxes.description(sb1).length > 10 && sb1.known === 0);
+PVZ.boxes.study(sb1);
+check('после осмотра известно больше', sb1.known === 1 && PVZ.boxes.description(sb1).length > 40);
+const openOut = PVZ.boxes.resolve(sb1, 'open');
+check('вскрытие дало исход и убрало коробку с полки', !!openOut && sb1.status === 'opened' && PVZ.boxes.count() === 0);
+const sb2 = PVZ.boxes.arrive(2);
+check('новая коробка приходит утром', !!sb2 && PVZ.boxes.count() === 1);
+check('вторая коробка за день не приходит', PVZ.boxes.arrive(2) === null);
+const sb3 = PVZ.boxes.arrive(3);
+check('коробки копятся изо дня в день', !!sb3 && PVZ.boxes.count() === 2, 'count=' + PVZ.boxes.count());
+const callOut = PVZ.boxes.resolve(sb2, 'call');
+const repOut = PVZ.boxes.resolve(sb3, 'report');
+check('звонок и заявление тоже закрывают коробку', !!callOut && !!repOut && PVZ.boxes.stats().sent === 1 && PVZ.boxes.stats().reported === 1);
+
+// сцена зала с забытыми посылками рисуется без ошибок
+const boxErrBefore = errors.length;
+const boxScene = PVZ.scenes.shift({ day: 5, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(boxScene);
+const bst = boxScene.debug.st;
+bst.shiftOpen = true; bst.doorOpen = true; bst.lightsOn = true; bst.clock = 12 * 60;
+PVZ.boxes.add('meow', 5); PVZ.boxes.add('music', 5); PVZ.boxes.add('moving', 5);
+boxScene.debug.sus();
+step(boxScene, 5);
+check('зал с забытыми посылками рисуется без ошибок', errors.length === boxErrBefore, errors.slice(boxErrBefore).join(' | '));
+boxScene.debug.view('counter');
+step(boxScene, 3);
+
+// --- толпа за стойкой: восемь человек в очереди рисуются без ошибок
+const crowdErrBefore = errors.length;
+const bigScene = PVZ.scenes.shift({ day: 10, phase: 'day' });
+PVZ.game.trans = null;
+PVZ.game.setScene(bigScene);
+const bigSt = bigScene.debug.st;
+bigSt.shiftOpen = true; bigSt.doorOpen = true; bigSt.lightsOn = true; bigSt.clock = 12 * 60;
+bigSt.queue.length = 0; bigSt.customer = null;
+for (let k = 0; k < 8; k++) bigScene.debug.spawn('question');
+bigScene.debug.step();
+step(bigScene, 8);
+check('очередь из восьми человек отрисована без ошибок', errors.length === crowdErrBefore, errors.slice(crowdErrBefore).join(' | '));
+check('в очереди действительно много людей', bigSt.queue.length + (bigSt.customer ? 1 : 0) >= 7,
+  'line=' + (bigSt.queue.length + (bigSt.customer ? 1 : 0)));
+
+// --- старый сейв получает поля персонажей и посылок
+PVZ.state.data.cast = undefined;
+PVZ.state.data.suspicious = undefined;
+PVZ.state.save();
+const migrated = PVZ.state.load();
+check('старый сейв получает персонажей и посылки', !!migrated && !!migrated.cast && !!migrated.suspicious,
+  migrated && JSON.stringify({ cast: !!migrated.cast, suspicious: !!migrated.suspicious }));
+
+// --- новые мини-игры: швабра, равновесие, провода, ловля посылок
+PVZ.input.down = false;
+{
+  // уборка кофе: сначала берём швабру, потом трём лужи, потом отжимаем
+  const q = new PVZ.sys.QTE({ type: 'clean', tool: 'mop', stain: 'coffee', title: 'x' });
+  q.draw(ctxStub);
+  check('уборка: швабра лежит на стойке', q.phase === 'take' && !q.heldTool);
+  q.onTap(q.toolRect.x + q.toolRect.w / 2, q.toolRect.y + q.toolRect.h / 2);
+  q.draw(ctxStub);
+  check('уборка: швабра взята', q.phase === 'clean' && q.heldTool);
+  q.spots.forEach((sp) => {
+    const cx = q.panel.x + 26 + sp.x * (q.panel.w - 52);
+    const cy = q.panel.y + 100 + sp.y * (q.panel.h - 176);
+    PVZ.input.down = true;
+    for (let k = 0; k < 12; k++) {
+      PVZ.input.x = cx + (k % 2 ? 42 : -42);
+      PVZ.input.y = cy - 28;
+      q.update(1 / 60);
+    }
+  });
+  PVZ.input.down = false;
+  q.draw(ctxStub);
+  check('уборка: все пятна стёрты', q.spots.every((sp) => sp.done), JSON.stringify(q.spots.map((sp) => sp.grime)));
+  check('уборка: пора отжимать швабру', q.phase === 'wring');
+  PVZ.input.down = true;
+  PVZ.input.x = q.bucket.x + q.bucket.w / 2;
+  PVZ.input.y = q.bucket.y + q.bucket.h / 2;
+  for (let k = 0; k < 40 && !q.done; k++) q.update(1 / 30);
+  PVZ.input.down = false;
+  check('уборка: завершена успешно', q.done && q.success);
+}
+{
+  // веник и осколки используют тот же движок, но другой инструмент и рисунок
+  const q = new PVZ.sys.QTE({ type: 'clean', tool: 'broom', stain: 'shards', title: 'x' });
+  q.draw(ctxStub);
+  q.onTap(q.toolRect.x + q.toolRect.w / 2, q.toolRect.y + q.toolRect.h / 2);
+  q.draw(ctxStub);
+  check('уборка: веник взят и осколки рисуются', q.heldTool && q.tool === 'broom' && q.stain === 'shards');
+}
+{
+  // равновесие: придерживаем стопку с наклонившейся стороны
+  const q = new PVZ.sys.QTE({ type: 'balance', title: 'x' });
+  q.draw(ctxStub);
+  PVZ.input.down = true;
+  PVZ.input.x = q.panel.x + q.panel.w - 12;
+  q.tilt = 0.4;
+  for (let k = 0; k < 260 && !q.done; k++) {
+    if (q.tilt < 0.06) q.tilt = 0.06;
+    q.update(1 / 30);
+  }
+  PVZ.input.down = false;
+  q.draw(ctxStub);
+  check('равновесие: стопка удержана', q.done && q.success, 'held=' + q.held);
+}
+{
+  // провода: каждому штекеру — гнездо того же цвета
+  const q = new PVZ.sys.QTE({ type: 'wires', title: 'x' });
+  q.draw(ctxStub);
+  const lay = q.wireLayout();
+  q.plugs.forEach((pl, i) => {
+    const si = q.sockets.findIndex((s) => s.color === pl.color);
+    q.onTap(lay.plugs[i].x + lay.plugs[i].w / 2, lay.plugs[i].y + lay.plugs[i].h / 2);
+    q.onTap(lay.sockets[si].x + lay.sockets[si].w / 2, lay.sockets[si].y + lay.sockets[si].h / 2);
+  });
+  q.draw(ctxStub);
+  check('провода: все три подключены', q.done && q.success);
+}
+{
+  // ловля: нажимаем по падающим посылкам
+  const q = new PVZ.sys.QTE({ type: 'catch', title: 'x' });
+  q.draw(ctxStub);
+  while (!q.done && q.caught < q.need) {
+    q.items = [{ x: 0.5, y: q.panel.y + 180, vy: 0, seed: 1 }];
+    const r = q.catchRect(q.items[0]);
+    q.onTap(r.x + r.w / 2, r.y + r.h / 2);
+  }
+  q.draw(ctxStub);
+  check('ловля: нужное число посылок поймано', q.done && q.success);
+}
+{
+  // щиток: подбираем комбинацию автоматов (нажатие переключает соседей)
+  const q = new PVZ.sys.QTE({ type: 'breakers', title: 'x' });
+  q.draw(ctxStub);
+  const n = q.switches.length;
+  let solution = null;
+  for (let mask = 0; mask < (1 << n) && solution === null; mask++) {
+    const state = q.switches.slice();
+    const presses = [];
+    for (let i = 0; i < n; i++) {
+      if (!(mask & (1 << i))) continue;
+      presses.push(i);
+      for (let k = i - 1; k <= i + 1; k++) if (k >= 0 && k < n) state[k] = !state[k];
+    }
+    if (state.every(Boolean)) solution = presses;
+  }
+  check('щиток: комбинация существует', !!solution, JSON.stringify(q.switches));
+  const lay = q.breakerLayout();
+  (solution || []).forEach((i) => q.onTap(lay[i].x + lay[i].w / 2, lay[i].y + lay[i].h / 2));
+  q.draw(ctxStub);
+  check('щиток: все автоматы включены', q.done && q.success);
+}
+
+// --- терпение не останавливается в QTE и ноутбуке
+{
+  PVZ.state.newGame();
+  silenceStories();
+  PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews'];
+  PVZ.state.data.tutorialSeen = true;
+  const scene = PVZ.scenes.shift({ day: 3, phase: 'day' });
+  PVZ.game.trans = null;
+  PVZ.game.setScene(scene);
+  const st2 = scene.debug.st;
+  st2.phase = 'day'; st2.shiftOpen = true; st2.doorOpen = true; st2.lightsOn = true;
+  st2.queue.length = 0; st2.customer = null; st2.nextT = 999; st2.eventT = 999;
+  const c = PVZ.sys.makeCustomer({ expr: 'neutral' });
+  c.kind = 'pickup'; c.state = 'atCounter'; c.talon = 1; c.orderIds = [];
+  c.moving = false; c.arrived = true; c.arrivedT = 1; c.enterAlpha = 1;
+  c.patience = 0.8; c.patienceRate = 0.05;
+  st2.customer = c;
+  st2.qte = new PVZ.sys.QTE({ type: 'rapid', title: 'x', customer: c });
+  const before = c.patience;
+  step(scene, 60);
+  check('терпение идёт во время QTE', c.patience < before - 0.01, 'было ' + before + ', стало ' + c.patience);
+  st2.qte = null;
+  c.patience = 0.8;
+  scene.debug.laptop();
+  const beforeLaptop = c.patience;
+  step(scene, 60);
+  check('терпение идёт при открытом ноутбуке', c.patience < beforeLaptop - 0.01, 'было ' + beforeLaptop + ', стало ' + c.patience);
+  st2.laptop = null;
+}
+
+// --- живые выдачи: у товаров есть свои микросценки, а у смен — особые гости
+{
+  const S = PVZ.serve;
+  check('serve.js загружен', !!S && !!S.MOMENTS && !!S.SPECIALS);
+  const ids = new Set();
+  S.MOMENTS.forEach((m) => {
+    check('у микросценки есть id и текст: ' + m.id, !!m.id && !!m.text && !ids.has(m.id));
+    ids.add(m.id);
+    check('у микросценки есть выбор: ' + m.id, Array.isArray(m.choices) && m.choices.length >= 2);
+    m.choices.forEach((ch) => check('выбор микросценки: ' + m.id, !!ch.label && !!ch.reply));
+  });
+  check('микросценок не меньше двадцати', S.MOMENTS.length >= 20, 'MOMENTS=' + S.MOMENTS.length);
+  const sids = new Set();
+  S.SPECIALS.forEach((d) => {
+    check('у особого гостя есть день и шаги: ' + d.id, !!d.id && d.day >= 2 && !sids.has(d.id));
+    sids.add(d.id);
+    check('у особого гостя есть сценарий: ' + d.id, Array.isArray(d.steps) && d.steps.length > 0);
+    d.steps.forEach((step) => check('шаг особого гостя: ' + d.id, !!step.text && step.choices.length >= 2));
+  });
+  for (let d = 2; d <= 10; d++) {
+    check('на смене ' + d + ' есть особый гость', S.SPECIALS.some((x) => x.day === d));
+  }
+  check('Витя Гром приходит на второй смене', (S.specialById('grom') || {}).day === 2);
+  check('цвет вещи устойчив', S.colorFor('Футболка') === S.colorFor('Футболка'));
+}
+
+// --- вторая смена: Витя Гром кричит, ломает товар и распугивает очередь
+{
+  PVZ.state.newGame();
+  silenceStories();
+  PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews'];
+  PVZ.state.data.tutorialSeen = true;
+  const scene = PVZ.scenes.shift({ day: 2, phase: 'day' });
+  PVZ.game.trans = null;
+  PVZ.game.setScene(scene);
+  const st3 = scene.debug.st;
+  st3.phase = 'day'; st3.shiftOpen = true; st3.doorOpen = true; st3.lightsOn = true;
+  st3.queue.length = 0; st3.customer = null; st3.special = null;
+  st3.clock = 11 * 60 + 30; st3.spawnT = 999; st3.eventT = 999; st3.npcSpawned = true;
+  step(scene, 4);
+  check('Гром приходит на второй смене сам', !!(st3.special && st3.special.id === 'grom'), st3.special && st3.special.id);
+  if (st3.special) {
+    // ставим его к стойке и даём побуянить
+    st3.queue = st3.queue.filter((q) => q.kind === 'special');
+    st3.nextT = 0;
+    step(scene, 8);
+    const grom = st3.customer;
+    check('Гром дошёл до стойки', !!grom && grom.kind === 'special');
+    if (grom) {
+      grom.vx = 625; grom.vgy = 800; grom.vh = 580 * (grom.height || 1);
+      grom.moving = false; grom.arrived = true; grom.arrivedT = 1;
+      st3.queue.length = 0;
+      const moneyBeforeRage = PVZ.state.data.money;
+      const ratingBeforeRage = PVZ.state.data.rating;
+      step(scene, 720);
+      check('Гром ломает товар: деньги уходят', PVZ.state.data.money < moneyBeforeRage, 'money=' + PVZ.state.data.money);
+      check('Гром ломает товар: рейтинг падает', PVZ.state.data.rating < ratingBeforeRage, 'rating=' + PVZ.state.data.rating);
+      check('Гром ломает товар: есть обломки', !!st3.smash || (st3.special && st3.special.breaks > 0), 'breaks=' + (st3.special && st3.special.breaks));
+      scene.onTap(620, 300);
+      check('с Громом можно поговорить', !!st3.dlg && st3.moment && st3.moment.kind === 'rage', 'dlg=' + !!st3.dlg);
+      if (st3.dlg) {
+        tapChoice(scene, 0);
+        step(scene, 2);
+        check('успокоить Грома — второй шаг', !!st3.dlg);
+        if (st3.dlg) tapChoice(scene, 0);
+        step(scene, 2);
+        check('Гром успокоен, история закрыта', !st3.dlg && st3.special.done, 'done=' + (st3.special && st3.special.done));
+      }
+    }
+  }
+}
+
+// --- примерка: клиент выходит из примерочной и показывает, как сидит вещь
+{
+  PVZ.state.newGame();
+  silenceStories();
+  PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews'];
+  PVZ.state.data.tutorialSeen = true;
+  const scene = PVZ.scenes.shift({ day: 3, phase: 'day' });
+  PVZ.game.trans = null;
+  PVZ.game.setScene(scene);
+  const st4 = scene.debug.st;
+  st4.phase = 'day'; st4.shiftOpen = true; st4.doorOpen = true; st4.lightsOn = true;
+  st4.queue.length = 0; st4.customer = null; st4.spawnT = 999; st4.eventT = 999;
+  st4.special = null; st4.specialBanner = 0; st4.npcSpawned = true;
+  const dress = PVZ.sys.makeOrder({
+    item: { name: 'Футболка', kind: 'clothes', size: 'S', price: 990 },
+    state: 'stored', cell: 'A-1-1', day: 3, cod: false, docs: false
+  });
+  st4.orders.push(dress);
+  scene.debug.spawn('pickup');
+  const buyer = st4.queue[st4.queue.length - 1];
+  buyer.orderIds = [dress.id];
+  buyer.code = dress.code;
+  buyer.item = dress.item;
+  buyer.parcels = 1;
+  buyer.codSum = 0;
+  buyer.docs = false;
+  buyer.wantsFitting = true;
+  buyer.fittingDone = false;
+  dress.customer = buyer.id;
+  st4.queue = [buyer];
+  st4.customer = null;
+  st4.nextT = 0;
+  step(scene, 4);
+  check('покупатель за одеждой у стойки', !!st4.customer);
+  if (st4.customer) {
+    st4.customer.vx = 625; st4.customer.vgy = 800; st4.customer.vh = 580 * (st4.customer.height || 1);
+    st4.customer.moving = false; st4.customer.arrived = true; st4.customer.arrivedT = 1;
+    st4.held = { id: dress.id, code: dress.code, item: dress.item, kind: dress.kind, scanned: true, onTable: true, unpacked: true, placeT: 1 };
+    step(scene, 2);
+    scene.onTap(620, 300);
+    check('диалог выдачи одежды открылся', !!st4.dlg);
+    let fittingChoice = -1;
+    if (st4.dlg) {
+      st4.dlg.choices.forEach((ch, i) => { if (/пример/i.test(ch.label)) fittingChoice = i; });
+    }
+    check('есть вариант «предложить примерить»', fittingChoice >= 0, 'index=' + fittingChoice);
+    if (fittingChoice >= 0) {
+      tapChoice(scene, fittingChoice);
+      check('клиент ушёл в примерочную', st4.fitting.length === 1, 'fitting=' + st4.fitting.length);
+      if (st4.fitting.length) st4.fitting[0].t = 0;
+      step(scene, 3);
+      check('клиент вернулся из примерочной', st4.queue.some((q) => q.kind === 'fitting-back'));
+      st4.nextT = 0;
+      step(scene, 4);
+      const back = st4.customer;
+      check('клиент снова у стойки', !!back && back.kind === 'fitting-back');
+      if (back) {
+        back.vx = 625; back.vgy = 800; back.vh = 580 * (back.height || 1);
+        back.moving = false; back.arrived = true; back.arrivedT = 1;
+        const servedBeforeShow = st4.stats.served;
+        scene.onTap(620, 300);
+        check('сцена примерки и показа открылась', !!st4.dlg && !!st4.moment && st4.moment.kind === 'tryon');
+        if (st4.dlg) {
+          tapChoice(scene, 0);
+          check('после примерки заказ выдан', st4.stats.served === servedBeforeShow + 1, 'served=' + st4.stats.served);
+          check('сцена примерки закрылась', !st4.moment);
+        }
+      }
+    }
+  }
+}
+
+// --- обычный товар: микросценка выдачи, затем выдача
+{
+  PVZ.state.newGame();
+  silenceStories();
+  PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews'];
+  PVZ.state.data.tutorialSeen = true;
+  const scene = PVZ.scenes.shift({ day: 4, phase: 'day' });
+  PVZ.game.trans = null;
+  PVZ.game.setScene(scene);
+  const st5 = scene.debug.st;
+  st5.phase = 'day'; st5.shiftOpen = true; st5.doorOpen = true; st5.lightsOn = true;
+  st5.queue.length = 0; st5.customer = null; st5.spawnT = 999; st5.eventT = 999;
+  st5.special = null; st5.specialBanner = 0; st5.npcSpawned = true;
+  const cans = PVZ.sys.makeOrder({
+    item: { name: 'Наушники', kind: 'other', size: 'S', price: 2990 },
+    state: 'stored', cell: 'B-1-1', day: 4, cod: false, docs: false
+  });
+  st5.orders.push(cans);
+  scene.debug.spawn('pickup');
+  const listener = st5.queue[st5.queue.length - 1];
+  listener.orderIds = [cans.id];
+  listener.code = cans.code;
+  listener.item = cans.item;
+  listener.parcels = 1;
+  listener.codSum = 0;
+  listener.docs = false;
+  listener.wantsFitting = false;
+  listener.momentDone = false;
+  cans.customer = listener.id;
+  st5.queue = [listener];
+  st5.customer = null;
+  st5.nextT = 0;
+  step(scene, 4);
+  if (st5.customer) {
+    st5.customer.vx = 625; st5.customer.vgy = 800; st5.customer.vh = 580 * (st5.customer.height || 1);
+    st5.customer.moving = false; st5.customer.arrived = true; st5.customer.arrivedT = 1;
+    st5.held = { id: cans.id, code: cans.code, item: cans.item, kind: cans.kind, scanned: true, onTable: true, unpacked: true, placeT: 1 };
+    step(scene, 2);
+    scene.onTap(620, 300);
+    const servedBefore2 = st5.stats.served;
+    if (st5.dlg) tapChoice(scene, 0);
+    check('микросценка обычного товара открылась', !!st5.dlg && !!st5.moment, 'dlg=' + !!st5.dlg + ' moment=' + !!st5.moment);
+    if (st5.dlg) tapChoice(scene, 0);
+    step(scene, 2);
+    check('после микросценки заказ выдан', st5.stats.served === servedBefore2 + 1, 'served=' + st5.stats.served);
+    check('живые выдачи посчитаны', st5.stats.moments >= 1, 'moments=' + st5.stats.moments);
+  }
+}
+
+// --- все особые гости проходятся по первому варианту без падений
+{
+  PVZ.serve.SPECIALS.forEach((def) => {
+    PVZ.state.newGame();
+    silenceStories();
+    PVZ.state.data.apps = ['appstore', 'phone', 'terminal', 'market', 'reviews'];
+    PVZ.state.data.tutorialSeen = true;
+    const scene = PVZ.scenes.shift({ day: def.day, phase: 'day' });
+    PVZ.game.trans = null;
+    PVZ.game.setScene(scene);
+    const st6 = scene.debug.st;
+    st6.phase = 'day'; st6.shiftOpen = true; st6.doorOpen = true; st6.lightsOn = true;
+    st6.queue.length = 0; st6.customer = null; st6.spawnT = 999; st6.eventT = 999;
+    st6.special = null; st6.specialBanner = 0; st6.npcSpawned = true;
+    const sp = scene.debug.special(def.id);
+    check('особый гость заспавнен: ' + def.id, !!sp);
+    if (!sp) return;
+    const c = sp.c;
+    st6.queue.length = 0;
+    st6.customer = c;
+    c.state = 'atCounter';
+    c.moving = false;
+    c.arrived = true;
+    c.arrivedT = 1;
+    c.vx = 625; c.vgy = 800; c.vh = 580 * (c.height || 1);
+    step(scene, 2);
+    scene.onTap(620, 300);
+    check('диалог особого гостя открылся: ' + def.id, !!st6.dlg);
+    let guard = 0;
+    while (st6.dlg && guard++ < 14) {
+      tapChoice(scene, 0);
+      step(scene, 2);
+    }
+    check('история особого гостя завершилась: ' + def.id, !st6.dlg && st6.special.done, 'dlg=' + !!st6.dlg);
+  });
+}
+
 // --- итог
 if (errors.length) {
   console.log('FAILED (' + errors.length + '):');
   errors.slice(0, 12).forEach((e) => console.log(' - ' + e));
   process.exit(1);
 }
-console.log('OK: сцены, живой рейтинг, подписи без цифр, отложенные последствия, бесконечный режим, сюжет мафии (куратор, ящик, услуга, улики, 5 концов), события дня, финал, магазин, Banana store и кот работают');
+console.log('OK: сцены, живой рейтинг, подписи без цифр, отложенные последствия, бесконечный режим, сюжет мафии (куратор, ящик, услуга, улики, 5 концов), события дня, финал, магазин, Banana store, кот, живые покупатели, сюжетные знакомые, мессенджер с выбором ответов, двенадцать постоянных персонажей с личными историями, рекомендации, кривая толпы, забытые посылки, живые выдачи с примеркой и девять особых гостей смен работают');

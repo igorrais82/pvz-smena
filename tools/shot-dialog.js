@@ -15,7 +15,7 @@
   const order = st.orders.find(o => o.id === c.orderIds[0]);
   c.codeScanned = true;
   c.wantsFitting = false;
-  st.held = { id: order.id, code: order.code, item: order.item, scanned: true };
+  st.held = { id: order.id, code: order.code, item: order.item, kind: order.kind, scanned: true, onTable: true, unpacked: true, placeT: 1 };
   PVZ.input.dispatch('tap', 620, 300);
   await sleep(500);
   return { served: st.stats.served, dlg: !!st.dlg, choices: st.dlg ? st.dlg.choices.length : 0 };

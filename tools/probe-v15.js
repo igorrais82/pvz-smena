@@ -54,7 +54,7 @@ global.addEventListener = noop;
 global.removeEventListener = noop;
 global.URLSearchParams = URLSearchParams;
 
-for (const f of ['core.js', 'pay.js', 'art.js', 'systems.js', 'apps.js', 'scenes.js', 'main.js']) {
+for (const f of ['core.js', 'music.js', 'pay.js', 'art.js', 'systems.js', 'apps.js', 'scenes.js', 'main.js']) {
   try {
     vm.runInThisContext(fs.readFileSync(path.join(ROOT, 'src', f), 'utf8'), { filename: f });
   } catch (e) {
@@ -125,8 +125,9 @@ try {
     ok(PVZ.state.data.radioStation === i && !PVZ.music.silent, 'станция ' + PVZ.apps.RADIO[i].name + ' включается');
   }
   ok(PVZ.music.TRACKS.length >= 6, 'музыкальных тем: ' + PVZ.music.TRACKS.length);
-  PVZ.music.playCalmStep(0, 0, 0.2, 1);
-  PVZ.music.playCalmStep(3, 0, 0.8, 1);
+  ok(!!(PVZ.music.THEMES.morning && PVZ.music.THEMES.day && PVZ.music.THEMES.evening),
+    'у утра, дня и вечера свои темы');
+  ok(!!PVZ.music.THEMES.mafia, 'у визита мафии своя тема');
   ok(true, 'все темы играются без ошибок');
 
   // ---- Premium store: витрина, скидки, монеты, подписка ----
